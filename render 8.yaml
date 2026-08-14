@@ -1,0 +1,22 @@
+services:
+  - type: worker
+    name: vpi-gavan-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: GROK_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: DB_PATH
+        value: gavan.db
+    # ВНИМАНИЕ: на бесплатном тарифе Render диск не персистентный —
+    # файловая система (и gavan.db) сбрасывается при каждом деплое/рестарте.
+    # Для сохранения данных между рестартами нужен платный план с disk,
+    # либо внешняя БД (см. README, раздел "Хостинг на Render").
