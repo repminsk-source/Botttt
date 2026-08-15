@@ -41,6 +41,14 @@ services:
         value: "900"
       - key: NUKE_COOLDOWN_SECONDS
         value: "3600"
+      - key: GLOBAL_MESSAGE_COOLDOWN_SECONDS
+        value: "1.5"
+      - key: DUPLICATE_MESSAGE_WINDOW_SECONDS
+        value: "4"
+      - key: SPAM_BURST_WINDOW_SECONDS
+        value: "10"
+      - key: SPAM_BURST_LIMIT
+        value: "8"
       # Ollama Cloud is reachable from Render; create the key at ollama.com/settings/keys.
       - key: AI_PROVIDER
         value: "ollama"

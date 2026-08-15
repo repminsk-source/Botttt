@@ -98,6 +98,8 @@ RESOURCE_NAMES_RU = {
 # вызов успел обновить БД) — без этого можно было обойти кулдаун и получить
 # ресурсы/вердикты несколько раз за один интервал.
 _user_locks: dict[int, asyncio.Lock] = {}
+_ai_inflight: set[int] = set()
+_war_inflight: set[int] = set()
 
 
 def get_user_lock(user_id: int) -> asyncio.Lock:
@@ -490,7 +492,7 @@ async def cmd_policy(message: Message):
     parts = message.text.split()
     if len(parts) == 1:
         current = config.POLICY_DEFINITIONS.get(country.get("policy", "development"), config.POLICY_DEFINITIONS["development"])
-        lines = [f"<b>🏛️ Национальная политика</b>\nТекущий курс: <b>{current['name']}</b>", current["description"], "", "Сменить курс можно раз в 24 часа:"]
+        lines = [f"<b>🏛️ Национальная политика</b>\nТекущий курс: <b>{current['name']}</b>", current["description"], "", "Сменить курс можно раз в 30 минут:"]
         for key, policy in config.POLICY_DEFINITIONS.items():
             lines.append(f"<code>/policy {key}</code> — {policy['name']}: {policy['description']}")
         await message.answer("\n".join(lines))
@@ -504,7 +506,7 @@ async def cmd_policy(message: Message):
     async with get_user_lock(message.from_user.id):
         changed = await db.set_policy(message.from_user.id, policy_key, now, config.POLICY_COOLDOWN_SECONDS)
     if not changed:
-        await message.answer("Политику можно менять не чаще одного раза в 24 часа.")
+        await message.answer("Политику можно менять не чаще одного раза в 30 минут.")
         return
     await message.answer(f"🏛️ Новый национальный курс: <b>{policy['name']}</b>\n{policy['description']}")
 
@@ -614,11 +616,15 @@ async def cmd_top(message: Message):
     if not countries:
         await message.answer("Пока никто не зарегистрировал страну.")
         return
+    scored = []
+    for c in countries:
+        buildings = await db.get_buildings(c["user_id"])
+        scored.append((progression_snapshot(c, buildings).get("score", 0), c))
+    scored.sort(key=lambda item: item[0], reverse=True)
     lines = ["🏆 <b>Рейтинг стран</b>\n"]
-    for i, c in enumerate(countries[:15], start=1):
-        total = progression_snapshot(c, {}).get("score", 0)
+    for i, (total, c) in enumerate(scored[:15], start=1):
         lines.append(f"{i}. {esc(c['name'])} — {total} очков развития")
-    await message.answer("\n".join(lines))
+    await message.answer("\n".join(lines), reply_markup=MAIN_INLINE)
 
 
 def _economy_upgrade_cost(current_level: int, amount: int) -> int:
@@ -1145,54 +1151,66 @@ async def cmd_attack(message: Message):
                     mins, secs = remaining // 60, remaining % 60
                     await message.answer(f"⏳ Следующую атаку можно совершить через {mins} мин {secs} сек.")
                     return
-
-            # Фиксируем момент атаки сразу, до (долгого) запроса к ИИ.
-            await db.touch_last_attack(attacker_id, int(time.time()))
+            if attacker_id in _war_inflight:
+                await message.answer("⏳ Твоя предыдущая атака ещё обрабатывается ведущим. Дождись результата.")
+                return
+            _war_inflight.add(attacker_id)
 
     # Запрос к ИИ намеренно вне локов — чтобы не держать блокировку обоих игроков
     # на десятки секунд, пока ждём ответ модели.
-    thinking_msg = await message.answer(
-        f"⚔️ Ведущий обдумывает исход столкновения с «{esc(defender['name'])}»..."
-    )
-    verdict = await ai.get_war_verdict(attacker, defender, action_text, world_context=world_context)
+    try:
+        thinking_msg = await message.answer(
+            f"⚔️ Ведущий обдумывает исход столкновения с «{esc(defender['name'])}»..."
+        )
+        verdict = await ai.get_war_verdict(attacker, defender, action_text, world_context=world_context)
+    except Exception:
+        _war_inflight.discard(attacker_id)
+        raise
     outcome = verdict.get("outcome", "error")
+    if outcome == "error":
+        _war_inflight.discard(attacker_id)
+        await thinking_msg.edit_text(esc(verdict.get("verdict_text", "⚠️ Не удалось получить вердикт от ИИ.")))
+        return
 
-    async with first_lock:
-        async with second_lock:
-            current_attacker = await db.get_country(attacker_id)
-            current_defender = await db.get_country(defender_id)
-            if not current_attacker or not current_defender:
-                await thinking_msg.edit_text("⚠️ Пока ведущий готовил вердикт, одна из стран была удалена. Результат не применён.")
-                return
-            attacker, defender = current_attacker, current_defender
-            attacker_changes = clamp_country_changes(
-                attacker, verdict.get("attacker_stat_changes", {})
-            )
-            defender_changes = clamp_country_changes(
-                defender, verdict.get("defender_stat_changes", {})
-            )
-
-            loot_gold = loot_resources = 0
-            if outcome == "attacker_win":
-                loot_gold = defender["gold"] * config.WAR_LOOT_PERCENT // 100
-                loot_resources = defender["resources"] * config.WAR_LOOT_PERCENT // 100
-            elif outcome == "defender_win":
-                loot_gold = -(attacker["gold"] * config.WAR_LOOT_PERCENT // 100)
-                loot_resources = -(attacker["resources"] * config.WAR_LOOT_PERCENT // 100)
-
-            if outcome in ("attacker_win", "defender_win", "draw"):
-                await db.apply_war_result(
-                    attacker_id, defender_id,
-                    attacker_changes, defender_changes,
-                    loot_gold=loot_gold, loot_resources=loot_resources,
+    try:
+        async with first_lock:
+            async with second_lock:
+                current_attacker = await db.get_country(attacker_id)
+                current_defender = await db.get_country(defender_id)
+                if not current_attacker or not current_defender:
+                    await thinking_msg.edit_text("⚠️ Пока ведущий готовил вердикт, одна из стран была удалена. Результат не применён.")
+                    return
+                attacker, defender = current_attacker, current_defender
+                attacker_changes = clamp_country_changes(
+                    attacker, verdict.get("attacker_stat_changes", {})
+                )
+                defender_changes = clamp_country_changes(
+                    defender, verdict.get("defender_stat_changes", {})
                 )
 
-            if outcome in ("attacker_win", "defender_win", "draw"):
-                await db.log_war(
-                    attacker_id, attacker["name"], defender_id, defender["name"],
-                    action_text, outcome, verdict["verdict_text"],
-                )
+                loot_gold = loot_resources = 0
+                if outcome == "attacker_win":
+                    loot_gold = defender["gold"] * config.WAR_LOOT_PERCENT // 100
+                    loot_resources = defender["resources"] * config.WAR_LOOT_PERCENT // 100
+                elif outcome == "defender_win":
+                    loot_gold = -(attacker["gold"] * config.WAR_LOOT_PERCENT // 100)
+                    loot_resources = -(attacker["resources"] * config.WAR_LOOT_PERCENT // 100)
 
+                if outcome in ("attacker_win", "defender_win", "draw"):
+                    await db.apply_war_result(
+                        attacker_id, defender_id,
+                        attacker_changes, defender_changes,
+                        loot_gold=loot_gold, loot_resources=loot_resources,
+                    )
+
+                if outcome in ("attacker_win", "defender_win", "draw"):
+                    await db.log_war(
+                        attacker_id, attacker["name"], defender_id, defender["name"],
+                        action_text, outcome, verdict["verdict_text"],
+                    )
+                    await db.touch_last_attack(attacker_id, int(time.time()))
+    finally:
+        _war_inflight.discard(attacker_id)
     outcome_text = {
         "attacker_win": f"🏆 Победа {esc(attacker['name'])}!",
         "defender_win": f"🛡️ {esc(defender['name'])} отстояла свои границы!",
@@ -1268,8 +1286,12 @@ async def cmd_action(message: Message):
         )
         return
 
-    lock = get_user_lock(message.from_user.id)
+    user_id = message.from_user.id
+    lock = get_user_lock(user_id)
     async with lock:
+        if user_id in _ai_inflight:
+            await message.answer("⏳ Предыдущее действие ещё обрабатывается ведущим. Дождись результата.")
+            return
         country = await db.get_country(message.from_user.id)
         if not country:
             await message.answer("Сначала создай страну: /founding Название")
@@ -1282,31 +1304,41 @@ async def cmd_action(message: Message):
                 mins, secs = remaining // 60, remaining % 60
                 await message.answer(f"⏳ Следующее действие можно совершить через {mins} мин {secs} сек.")
                 return
-
-        # Фиксируем момент действия сразу — до (долгого) запроса к ИИ. Иначе повторный
-        # /action, отправленный, пока первый ещё ждёт ответ модели, обходит кулдаун.
-        await db.touch_last_action(message.from_user.id, int(time.time()))
+        _ai_inflight.add(user_id)
 
     # Запрос к ИИ намеренно вне лока — чтобы не держать блокировку пользователя
     # на десятки секунд и не блокировать другие его команды (/country и т.п.).
     thinking_msg = await message.answer("🤔 Ведущий обдумывает вердикт...")
     world_context = f"Текущий год мира: {current_year}."
-    verdict = await ai.get_verdict(country, action_text, world_context=world_context)
+    try:
+        verdict = await ai.get_verdict(country, action_text, world_context=world_context)
+    except Exception:
+        _ai_inflight.discard(user_id)
+        raise
+    if verdict.get("success") == "error":
+        _ai_inflight.discard(user_id)
+        await thinking_msg.edit_text(esc(verdict.get("verdict_text", "⚠️ Не удалось получить вердикт от ИИ.")))
+        return
 
-    async with lock:
-        current_country = await db.get_country(message.from_user.id)
-        if not current_country:
-            await thinking_msg.edit_text("⚠️ Пока ведущий готовил вердикт, страна была удалена. Результат не применён.")
-            return
-        country = current_country
-        changes = clamp_country_changes(country, verdict.get("stat_changes", {}))
-        await db.apply_action_result(
-            message.from_user.id,
-            changes,
-            country["name"],
-            action_text,
-            verdict["verdict_text"],
-        )
+    try:
+        async with lock:
+            current_country = await db.get_country(message.from_user.id)
+            if not current_country:
+                await thinking_msg.edit_text("⚠️ Пока ведущий готовил вердикт, страна была удалена. Результат не применён.")
+                return
+            country = current_country
+            changes = clamp_country_changes(country, verdict.get("stat_changes", {}))
+            await db.apply_action_result(
+                message.from_user.id,
+                changes,
+                country["name"],
+                action_text,
+                verdict["verdict_text"],
+            )
+            await db.touch_last_action(user_id, int(time.time()))
+    finally:
+        _ai_inflight.discard(user_id)
+
 
     changes_lines = []
     for stat, delta in changes.items():

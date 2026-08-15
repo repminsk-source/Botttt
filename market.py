@@ -41,6 +41,6 @@ RESOURCE_LABELS = {
 
 def format_prices() -> str:
     return "\n".join(
-        f"{RESOURCE_LABELS.get(resource, resource)}: {price} золота/шт."
+        f"{RESOURCE_LABELS.get(resource, resource)}: {price} денег/шт."
         for resource, price in get_all_prices().items()
     )

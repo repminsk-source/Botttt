@@ -1,6 +1,9 @@
 import aiosqlite
+import logging
 import time
 from contextlib import asynccontextmanager
+logger = logging.getLogger("gavan.db")
+
 from config import (
     DB_PATH,
     START_STATS,
@@ -210,8 +213,12 @@ async def init_db():
         for stmt in MIGRATIONS:
             try:
                 await db.execute(stmt)
-            except Exception:
-                pass  # колонка уже существует
+            except aiosqlite.OperationalError as exc:
+                # ALTER TABLE повторно выдаёт duplicate column name на уже
+                # обновлённой базе. Любую другую ошибку нельзя скрывать:
+                # иначе Render продолжит работу с неполной схемой.
+                if "duplicate column name" not in str(exc).lower():
+                    raise
         await db.commit()
 
 
