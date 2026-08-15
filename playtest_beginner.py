@@ -6,7 +6,7 @@ os.environ.setdefault("BOT_TOKEN", "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh
 
 import config
 import db
-from bot import format_country, progression_snapshot
+from bot import format_country_economy, format_country_summary, progression_snapshot
 
 
 async def main():
@@ -76,9 +76,12 @@ async def main():
         assert country["policy"] == "development"
         snapshot = progression_snapshot(country, buildings)
         assert snapshot["score"] >= 0
-        card = await format_country(country)
-        assert "Гана" in card and "Игровое население" in card and "Следующий" in card
-        print("05 policy, progress, and country card: OK")
+        summary = await format_country_summary(country)
+        economy = await format_country_economy(country)
+        assert "Гана" in summary and "Следующий шаг" in summary
+        assert summary.count("\\n") <= 10
+        assert economy.count("\\n") <= 12 and "Экономика" in economy
+        print("05 policy, progress, and compact cards: OK")
         print("BEGINNER_PLAYTEST_OK")
     finally:
         db.DB_PATH = old_path

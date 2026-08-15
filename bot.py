@@ -448,21 +448,15 @@ async def format_country_summary(c: dict) -> str:
     buildings = await db.get_buildings(c["user_id"])
     progress = progression_snapshot(c, buildings)
     stage_name = progress["stage"][1]
-    real_population = world_data.format_population(c.get("real_population"))
-    profile_year = c.get("data_year") or "нет года"
-    alliance = await db.get_user_alliance(c["user_id"])
-    alliance_line = f"🤝 {esc(alliance['tag'])} — {esc(alliance['name'])}\n" if alliance else ""
     next_step = next_step_hint(c, buildings)
+    alliance = await db.get_user_alliance(c["user_id"])
+    alliance_line = f" · 🤝 {esc(alliance['tag'])}" if alliance else ""
     return (
-        f"🏳️ <b>{esc(c['name'])}</b> · {territory.TIER_LABEL_RU.get(c.get('territory_tier', 'medium'), c.get('territory_tier', 'medium'))}\n"
-        f"{alliance_line}\n"
-        f"<b>Сейчас</b> · этап <b>{esc(stage_name)}</b> · счёт <b>{progress['score']}</b>\n"
-        f"💰 Деньги: <b>{c['gold']:,}</b> · 📦 Ресурсы: <b>{c['resources']:,}</b>\n"
-        f"👥 Население: <b>{c['population']:,}</b> · 🧑‍🤝‍🧑 Резерв: <b>{c['manpower']:,}</b>\n"
-        f"⚔️ Армия: <b>{c['military']:,}</b> · 🏛️ Курс: <b>{esc(config.POLICY_DEFINITIONS.get(c.get('policy', 'development'), config.POLICY_DEFINITIONS['development'])['name'])}</b>\n"
-        f"🛡️ Стабильность: <b>{c['stability']}/100</b> · 🌐 Репутация: <b>{c['reputation']}/100</b>\n\n"
-        f"<b>📚 Реальный профиль ({profile_year})</b>\n"
-        f"👥 Население страны: {real_population}\n\n"
+        f"🏳️ <b>{esc(c['name'])}</b>{alliance_line}\n"
+        f"Этап: <b>{esc(stage_name)}</b> · очки: <b>{progress['score']}</b>\n\n"
+        f"💰 <b>{c['gold']:,}</b> денег  ·  📦 <b>{c['resources']:,}</b> ресурсов\n"
+        f"👥 <b>{c['population']:,}</b> населения  ·  ⚔️ <b>{c['military']:,}</b> армии\n"
+        f"🛡️ Стабильность: <b>{c['stability']}/100</b>  ·  🌐 Репутация: <b>{c['reputation']}/100</b>\n\n"
         f"<b>Следующий шаг</b>\n{next_step}"
     )
 
@@ -470,23 +464,17 @@ async def format_country_summary(c: dict) -> str:
 async def format_country_economy(c: dict) -> str:
     buildings = await db.get_buildings(c["user_id"])
     preview = production_preview(buildings)
-    lines = [
-        f"💼 <b>Экономика {esc(c['name'])}</b>",
-        "",
-        f"💰 Деньги: <b>{c['gold']:,}</b>",
-        f"📦 Ресурсы: <b>{c['resources']:,}</b>",
-        f"🌲 Дерево: <b>{c['wood']:,}</b> · ⛓️ Железо: <b>{c['iron']:,}</b>",
-        f"🪨 Уголь: <b>{c['coal']:,}</b> · 🛢️ Нефть: <b>{c['oil']:,}</b>",
-        f"🌽 Еда: <b>{c['food']:,}</b> · 💧 Вода: <b>{c['water']:,}</b>",
-        f"\n🏗️ Постройки: <b>{sum(max(0, int(v)) for v in buildings.values())}</b> уровней",
-    ]
-    if preview:
-        lines += ["", "<b>Производство за сбор</b>"]
-        lines.extend(f"{RESOURCE_NAMES_RU.get(k, k)}: <b>+{v:,}</b>" for k, v in preview.items())
-    else:
-        lines += ["", "Производства пока нет. Начни с фермы или шахты."]
-    lines += ["", "<b>Следующий шаг:</b> открой «🏗️ Строить» и выбери инфраструктуру."]
-    return "\n".join(lines)
+    produced = ", ".join(f"{RESOURCE_NAMES_RU.get(k, k)} +{v:,}" for k, v in preview.items()) if preview else "пока нет"
+    return (
+        f"💼 <b>Экономика {esc(c['name'])}</b>\n\n"
+        f"💰 Деньги: <b>{c['gold']:,}</b>\n"
+        f"📦 Основные ресурсы: <b>{c['resources']:,}</b>\n"
+        f"🌲 Дерево: <b>{c['wood']:,}</b> · 🌽 Еда: <b>{c['food']:,}</b>\n"
+        f"⛓️ Железо: <b>{c['iron']:,}</b> · 💧 Вода: <b>{c['water']:,}</b>\n\n"
+        f"🏗️ Уровни построек: <b>{sum(max(0, int(v)) for v in buildings.values())}</b>\n"
+        f"📥 За один сбор: <b>{produced}</b>\n\n"
+        "Выбери действие ниже."
+    )
 
 
 @dp.message(CommandStart())
@@ -557,7 +545,7 @@ async def cmd_founding(message: Message):
             return
 
     await message.answer(
-        f"Страна основана! 🎉\n\n{await format_country(country)}",
+        f"Страна основана! 🎉\n\n{await format_country_summary(country)}",
         reply_markup=MAIN_INLINE,
     )
 
@@ -647,45 +635,26 @@ async def cmd_progress(message: Message):
         else "не определён: нет профиля World Bank"
     )
     lines = [
-        f"<b>📈 Прогресс страны: {esc(country['name'])}</b>",
-        f"Фактическое население: <b>{real_population_text}</b>",
-        f"Лимит армии по населению: <b>{army_limit_text}</b>",
-        "Игровое население: без искусственного территориального потолка.",
-        f"Текущий этап: <b>{esc(stage_name)}</b>",
-        f"Игровой счёт: <b>{progress['score']}</b>",
-        f"Состав счёта: характеристики {progress['stats_score']} + уровни построек {progress['building_levels']} × {config.PROGRESS_BUILDING_POINTS}",
-        f"Цель этапа: {esc(stage_goal)}",
-        "",
-        "<b>Как растёт счёт</b>",
-        "• /upgrade — повышает характеристики за очки развития.",
-        "• /build — добавляет уровни построек и новые источники дохода.",
-        "• /history — показывает реальные показатели страны за 1990, 2000, 2010 и 2020 годы.",
-        "• /collect — забирает производство построек; фермы могут превращать еду в население без территориального потолка, шахта и рынок постепенно повышают экономику.",
-        "• /mobilize — переводит резерв людей и деньги в армию.",
-        "",
-        "<b>Ограничения</b>",
-        "Каждое стратегическое действие имеет отдельный таймер. Повторять одну команду бесконечно нельзя: страна развивается через планирование, а не через спам.",
+        f"📈 <b>Прогресс {esc(country['name'])}</b>",
+        f"Этап: <b>{esc(stage_name)}</b> · очки: <b>{progress['score']}</b>",
+        f"Цель: <b>{esc(stage_goal)}</b>",
     ]
-    active_timer_specs = [
-        ("collect", config.COLLECT_COOLDOWN_SECONDS, "Сбор"),
-        ("build", config.BUILD_COOLDOWN_SECONDS, "Строительство"),
-        ("upgrade", config.UPGRADE_COOLDOWN_SECONDS, "Улучшение"),
-        ("mobilize", config.MOBILIZE_COOLDOWN_SECONDS, "Мобилизация"),
-        ("action", config.ACTION_COOLDOWN_SECONDS, "Действие"),
-        ("attack", config.ATTACK_COOLDOWN_SECONDS, "Атака"),
-    ]
+    if progress["next_stage"]:
+        target, next_name, next_goal = progress["next_stage"]
+        lines.append(f"До «{esc(next_name)}»: <b>{target - progress['score']}</b> очков")
+    else:
+        lines.append("Верхний этап достигнут — развивай влияние через мир и войну.")
     active_timers = [
         cooldown_text(label, cooldown_remaining(country, action, seconds))
-        for action, seconds, label in active_timer_specs
+        for action, seconds, label in [
+            ("collect", config.COLLECT_COOLDOWN_SECONDS, "Сбор"),
+            ("build", config.BUILD_COOLDOWN_SECONDS, "Строительство"),
+            ("action", config.ACTION_COOLDOWN_SECONDS, "Действие"),
+        ]
         if cooldown_remaining(country, action, seconds)
     ]
     if active_timers:
-        lines += ["", "<b>⏱️ Сейчас на таймерах</b>", *active_timers]
-    if progress["next_stage"]:
-        target, next_name, next_goal = progress["next_stage"]
-        lines += ["", f"До этапа «{esc(next_name)}»: <b>{target - progress['score']}</b> очков.", f"Что даст этап: {esc(next_goal)}"]
-    else:
-        lines += ["", "Ты достиг верхнего этапа развития. Дальше главная цель — влияние через действия, войны и альянсы."]
+        lines += ["", "⏱️ " + " · ".join(active_timers)]
     lines += ["", next_step_hint(country, buildings)]
     await message.answer("\n".join(lines), reply_markup=PROGRESS_INLINE)
 
@@ -772,7 +741,7 @@ async def cmd_upgrade(message: Message):
         updated = await db.get_country(message.from_user.id)
 
     await message.answer(
-        f"✅ {STAT_NAMES_RU[stat]} увеличена на {amount} (потрачено {cost} очков).\n\n{await format_country(updated)}"
+        f"✅ {STAT_NAMES_RU[stat]} увеличена на {amount} (потрачено {cost} очков).\n\n{await format_country_summary(updated)}"
     )
 
 
@@ -1540,14 +1509,13 @@ async def menu_army(message: Message):
     base_capacity = country["military_bases"] * config.MILITARY_PER_BASE
     factual_capacity = int(country["real_population"] * config.MAX_ARMY_POPULATION_SHARE / config.MILITARY_UNIT_SIZE) if country.get("real_population") else None
     demographic_text = f"\nДемографический предел: {factual_capacity:,}" if factual_capacity is not None else ""
+    free_capacity = max(0, base_capacity - country['military'])
     await message.answer(
-        f"<b>⚔️ Армия</b>\n\nТекущая сила: {country['military']} / {base_capacity} внутренних единиц\n"
-        f"Военная вместимость: {base_capacity * config.MILITARY_UNIT_SIZE:,} военнослужащих\n"
-        f"Военные базы: {country['military_bases']} · 1 база = {config.MILITARY_PER_BASE * config.MILITARY_UNIT_SIZE:,} мест\n"
-        f"Игровое население: {country['population']:,} · нужно {config.MOBILIZE_POPULATION_PER_POINT} на 1 единицу армии\n"
-        f"Резерв людей: {country['manpower']}\nДеньги: {country['gold']}{demographic_text}\n\n"
-        f"Стоимость +1 армии: {config.MOBILIZE_MANPOWER_PER_POINT} резерва + {config.MOBILIZE_GOLD_PER_POINT} денег.\n"
-        "Выбери действие ниже — вводить команды вручную не нужно.",
+        f"⚔️ <b>Армия {esc(country['name'])}</b>\n\n"
+        f"Сила: <b>{country['military']:,}/{base_capacity:,}</b> · свободно <b>{free_capacity:,}</b>\n"
+        f"Базы: <b>{country['military_bases']}</b> · резерв: <b>{country['manpower']:,}</b>\n"
+        f"Деньги: <b>{country['gold']:,}</b> · население: <b>{country['population']:,}</b>\n\n"
+        "Выбери одно действие ниже.",
         reply_markup=ARMY_INLINE,
     )
 
