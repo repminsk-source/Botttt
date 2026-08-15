@@ -30,7 +30,7 @@ def test_all_visible_buttons_have_routes():
 
 def test_unknown_text_restores_menu():
     assert '@dp.message(F.text)' in SOURCE
-    assert 'reply_markup=MAIN_KEYBOARD' in SOURCE
+    assert 'reply_markup=MAIN_INLINE' in SOURCE
 
 
 if __name__ == "__main__":

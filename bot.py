@@ -8,7 +8,15 @@ import time
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
-from aiogram.types import ErrorEvent, Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import (
+    ErrorEvent,
+    Message,
+    CallbackQuery,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
@@ -121,6 +129,32 @@ MORE_KEYBOARD = ReplyKeyboardMarkup(
     is_persistent=True,
     input_field_placeholder="Выберите раздел",
 )
+
+# Inline buttons are the reliable interface in groups: unlike reply-keyboard
+# text, callback queries are delivered even when Telegram Privacy Mode is on.
+MAIN_INLINE = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="📊 Страна", callback_data="ui:country"), InlineKeyboardButton(text="📥 Сбор", callback_data="ui:collect")],
+    [InlineKeyboardButton(text="🏗️ Строить", callback_data="ui:build"), InlineKeyboardButton(text="⚔️ Армия", callback_data="ui:army")],
+    [InlineKeyboardButton(text="📈 Прогресс", callback_data="ui:progress"), InlineKeyboardButton(text="☰ Ещё", callback_data="ui:more")],
+])
+
+MORE_INLINE = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="📰 Новости", callback_data="ui:news"), InlineKeyboardButton(text="🌍 Рейтинг", callback_data="ui:top")],
+    [InlineKeyboardButton(text="🏛️ Политика", callback_data="ui:policy"), InlineKeyboardButton(text="🤝 Дипломатия", callback_data="ui:diplomacy")],
+    [InlineKeyboardButton(text="📖 Помощь", callback_data="ui:guide"), InlineKeyboardButton(text="⬅️ Назад", callback_data="ui:back")],
+])
+
+
+def callback_message(callback: CallbackQuery, text: str) -> Message:
+    """Make a normal Message-shaped object for existing command handlers."""
+    return callback.message.model_copy(update={"from_user": callback.from_user, "text": text})
+
+
+async def finish_callback(callback: CallbackQuery, command: str, handler, markup=MAIN_INLINE):
+    await callback.answer()
+    await handler(callback_message(callback, command))
+    if markup is not None:
+        await callback.message.answer("Меню разделов:", reply_markup=markup)
 
 
 def progression_snapshot(country: dict, buildings: dict | None = None) -> dict:
@@ -374,14 +408,14 @@ async def cmd_start(message: Message):
     existing = await db.get_country(message.from_user.id)
     if existing:
         await animate(message, ["🌍 Загружаю твою державу…", "✅ С возвращением в ВПИ ГАВАНЬ!"])
-        await message.answer("Начни с кнопки «📊 Моя страна». Я буду подсказывать следующий шаг.", reply_markup=MAIN_KEYBOARD)
+        await message.answer("Начни с кнопки «📊 Моя страна». Я буду подсказывать следующий шаг.", reply_markup=MAIN_INLINE)
         return
     await animate(message, ["🌍 Добро пожаловать в ВПИ ГАВАНЬ…", "🗺️ Здесь ты строишь страну, развиваешь армию и влияешь на мир."])
     await message.answer(
         "<b>Начинаем с одного шага:</b> напиши название реальной страны.\n\n"
         "Пример: <code>/founding Бразилия</code>\n\n"
         "После основания я покажу, что делать дальше.",
-        reply_markup=MAIN_KEYBOARD,
+        reply_markup=MAIN_INLINE,
     )
 
 
@@ -436,7 +470,10 @@ async def cmd_founding(message: Message):
             await message.answer("Не удалось сохранить страну. Повтори попытку позже.")
             return
 
-    await message.answer(f"Страна основана! 🎉\n\n{await format_country(country)}")
+    await message.answer(
+        f"Страна основана! 🎉\n\n{await format_country(country)}",
+        reply_markup=MAIN_INLINE,
+    )
 
 
 @dp.message(Command("policy"))
@@ -495,7 +532,7 @@ async def cmd_history(message: Message):
             f"продолжительность жизни {world_data.format_life_expectancy(row.get('life_expectancy'))}"
         )
     lines.append("\nДанные относятся к фактической стране. Игровые ресурсы, здания и таймеры не являются реальными бюджетами страны.")
-    await message.answer("\n".join(lines), reply_markup=MAIN_KEYBOARD)
+    await message.answer("\n".join(lines), reply_markup=MAIN_INLINE)
 
 
 @dp.message(Command("country"))
@@ -564,7 +601,7 @@ async def cmd_progress(message: Message):
     else:
         lines += ["", "Ты достиг верхнего этапа развития. Дальше главная цель — влияние через действия, войны и альянсы."]
     lines += ["", next_step_hint(country, buildings)]
-    await message.answer("\n".join(lines), reply_markup=MAIN_KEYBOARD)
+    await message.answer("\n".join(lines), reply_markup=MAIN_INLINE)
 
 
 @dp.message(Command("top"))
@@ -1328,7 +1365,7 @@ BEGINNER_GUIDE = (
 
 @dp.message(Command("guide"))
 async def cmd_guide(message: Message):
-    await message.answer(BEGINNER_GUIDE, reply_markup=MAIN_KEYBOARD)
+    await message.answer(BEGINNER_GUIDE, reply_markup=MAIN_INLINE)
 
 
 @dp.message(F.text.in_({"📊 Моя страна", "📊 Страна"}))
@@ -1415,9 +1452,72 @@ async def menu_more(message: Message):
         reply_markup=MORE_KEYBOARD,
     )
 
+
+@dp.callback_query(F.data == "ui:more")
+async def callback_more(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer("<b>Ещё разделы</b>", reply_markup=MORE_INLINE)
+
+
+@dp.callback_query(F.data == "ui:back")
+async def callback_back(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer("<b>Главное меню</b>", reply_markup=MAIN_INLINE)
+
+
+@dp.callback_query(F.data == "ui:country")
+async def callback_country(callback: CallbackQuery):
+    await finish_callback(callback, "/country", cmd_country)
+
+
+@dp.callback_query(F.data == "ui:collect")
+async def callback_collect(callback: CallbackQuery):
+    await finish_callback(callback, "/collect", cmd_collect)
+
+
+@dp.callback_query(F.data == "ui:build")
+async def callback_build(callback: CallbackQuery):
+    await finish_callback(callback, "/build", menu_build)
+
+
+@dp.callback_query(F.data == "ui:army")
+async def callback_army(callback: CallbackQuery):
+    await finish_callback(callback, "/mobilize", menu_army)
+
+
+@dp.callback_query(F.data == "ui:progress")
+async def callback_progress(callback: CallbackQuery):
+    await finish_callback(callback, "/progress", cmd_progress)
+
+
+@dp.callback_query(F.data == "ui:news")
+async def callback_news(callback: CallbackQuery):
+    await finish_callback(callback, "/news", cmd_news)
+
+
+@dp.callback_query(F.data == "ui:top")
+async def callback_top(callback: CallbackQuery):
+    await finish_callback(callback, "/top", cmd_top)
+
+
+@dp.callback_query(F.data == "ui:policy")
+async def callback_policy(callback: CallbackQuery):
+    await finish_callback(callback, "/policy", cmd_policy)
+
+
+@dp.callback_query(F.data == "ui:diplomacy")
+async def callback_diplomacy(callback: CallbackQuery):
+    await finish_callback(callback, "/alliances", cmd_alliances, MORE_INLINE)
+
+
+@dp.callback_query(F.data == "ui:guide")
+async def callback_guide(callback: CallbackQuery):
+    await finish_callback(callback, "/guide", cmd_guide, MAIN_INLINE)
+
+
 @dp.message(F.text == "⬅️ Назад")
 async def menu_back(message: Message):
-    await answer_topic_safe(message, "Главное меню", reply_markup=MAIN_KEYBOARD)
+    await answer_topic_safe(message, "Главное меню", reply_markup=MAIN_INLINE)
 
 # --- Альянсы ---
 
@@ -1656,7 +1756,7 @@ async def cmd_help(message: Message):
         )
     if is_admin(message.from_user.id):
         text += "\n\n<b>🔐 Панель администратора</b>\nДополнительные команды доступны только администратору."
-    await answer_topic_safe(message, text, reply_markup=MAIN_KEYBOARD)
+    await answer_topic_safe(message, text, reply_markup=MAIN_INLINE)
 
 
 @dp.message(F.text.regexp(r"^/"))
@@ -1665,7 +1765,7 @@ async def unknown_group_command(message: Message):
         await answer_topic_safe(
             message,
             "Не понял эту команду. Открой подсказку: <code>/help</code> или <code>/help@имя_бота</code>.",
-            reply_markup=MAIN_KEYBOARD,
+            reply_markup=MAIN_INLINE,
         )
 
 
@@ -1680,7 +1780,7 @@ async def unhandled_text(message: Message):
     await answer_topic_safe(
         message,
         "Я не распознал этот пункт меню. Используй кнопки ниже или открой <b>📖 Помощь</b>.",
-        reply_markup=MAIN_KEYBOARD,
+        reply_markup=MAIN_INLINE,
     )
 
 
