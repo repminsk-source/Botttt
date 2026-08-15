@@ -19,6 +19,12 @@ EXPECTED = {
     "ui:guide": "callback_guide",
     "ui:back": "callback_back",
 }
+BUILD_CALLBACKS = {
+    "build:farm", "build:mine", "build:market", "build:well", "build:granary",
+    "build:sawmill", "build:iron_mine", "build:coal_mine", "build:oil_rig",
+    "build:uranium_mine", "build:base",
+}
+
 
 
 def test_callback_handlers_registered():
@@ -28,8 +34,15 @@ def test_callback_handlers_registered():
         # The callback filter is a MagicFilter whose repr is opaque, so verify
         # the callback names and exact count after importing the real dispatcher.
         names[handler.callback.__name__] = names.get(handler.callback.__name__, 0) + 1
-    assert set(names) == set(EXPECTED.values())
+    assert set(names) == set(EXPECTED.values()) | {"callback_build_type"}
     assert all(count == 1 for count in names.values())
+    actual_build_callbacks = {
+        button.callback_data
+        for row in bot.BUILD_INLINE.inline_keyboard
+        for button in row
+        if button.callback_data and button.callback_data.startswith("build:")
+    }
+    assert actual_build_callbacks == BUILD_CALLBACKS
 
 
 if __name__ == "__main__":

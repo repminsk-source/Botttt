@@ -150,6 +150,16 @@ MORE_INLINE = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="📖 Помощь", callback_data="ui:guide"), InlineKeyboardButton(text="⬅️ Назад", callback_data="ui:back")],
 ])
 
+BUILD_INLINE = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="🌾 Ферма", callback_data="build:farm"), InlineKeyboardButton(text="⛏️ Шахта", callback_data="build:mine")],
+    [InlineKeyboardButton(text="🏪 Рынок", callback_data="build:market"), InlineKeyboardButton(text="💧 Колодец", callback_data="build:well")],
+    [InlineKeyboardButton(text="🌽 Амбар", callback_data="build:granary"), InlineKeyboardButton(text="🌲 Лесопилка", callback_data="build:sawmill")],
+    [InlineKeyboardButton(text="⛓️ Железо", callback_data="build:iron_mine"), InlineKeyboardButton(text="🪨 Уголь", callback_data="build:coal_mine")],
+    [InlineKeyboardButton(text="🛢️ Нефть", callback_data="build:oil_rig"), InlineKeyboardButton(text="☢️ Уран", callback_data="build:uranium_mine")],
+    [InlineKeyboardButton(text="🪖 Военная база", callback_data="build:base")],
+    [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="ui:back")],
+])
+
 
 def callback_message(callback: CallbackQuery, text: str) -> Message:
     """Make a normal Message-shaped object for existing command handlers."""
@@ -330,7 +340,7 @@ async def format_country(c: dict) -> str:
         f"\n<b>Игровые характеристики:</b>\n"
         f"💰 Экономика: {c['economy']}\n"
         f"⚔️ Армия: {c['military']}{army_limit_text}"
-        f"👥 Игровое население: {c['population']} млн (без искусственного лимита)\n"
+        f"👥 Игровое население: {c['population']:,} единиц (без искусственного лимита)\n"
         f"🔬 Технологии: {c['tech']}\n"
         f"🤝 Дипломатия: {c['diplomacy']}\n"
         f"🏛️ Национальный курс: {config.POLICY_DEFINITIONS.get(c.get('policy', 'development'), config.POLICY_DEFINITIONS['development'])['name']}\n"
@@ -1432,19 +1442,9 @@ async def menu_top(message: Message):
 @dp.message(F.text.in_({"🏗️ Построить", "🏗️ Строить"}))
 async def menu_build(message: Message):
     await message.answer(
-        "<b>🏗️ Что строить сначала</b>\n\n"
-        "🌾 Ферма — резерв людей\n"
-        "⛏️ Шахта — обычные ресурсы\n"
-        "🏪 Рынок — деньги\n"
-        "💧 Колодец — вода\n"
-        "🌽 Амбар — еда\n"
-        "🪵 Лесопилка — дерево\n"
-        "⛓️ Железный рудник — железо\n"
-        "🪨 Угольная шахта — уголь\n"
-        "🛢️ Нефтяная вышка — нефть\n"
-        "☢️ Урановый рудник — уран после развития технологий\n"
-        "🪖 Военная база — вместимость армии\n\n"
-        "Начни с: <code>/build farm</code>, затем следуй подсказке в /progress."
+        "<b>🏗️ Развитие инфраструктуры</b>\n\n"
+        "Выбери один объект. После строительства сбор ресурсов покажет новый эффект.",
+        reply_markup=BUILD_INLINE,
     )
 
 
@@ -1476,7 +1476,8 @@ async def menu_army(message: Message):
         f"Игровое население: {country['population']:,} · нужно {config.MOBILIZE_POPULATION_PER_POINT} на 1 единицу армии\n"
         f"Резерв людей: {country['manpower']}\nДеньги: {country['gold']}{demographic_text}\n\n"
         f"Стоимость +1 армии: {config.MOBILIZE_MANPOWER_PER_POINT} резерва + {config.MOBILIZE_GOLD_PER_POINT} денег.\n"
-        "Команда: <code>/mobilize 1</code>"
+        "Открой команду <code>/mobilize 1</code>, когда будешь готов мобилизовать резерв.",
+        reply_markup=MAIN_INLINE,
     )
 
 
@@ -1485,7 +1486,7 @@ async def menu_more(message: Message):
     await answer_topic_safe(
         message,
         "<b>Ещё разделы</b>\nНовости, рейтинг, политика, дипломатия и помощь.",
-        reply_markup=MORE_KEYBOARD,
+        reply_markup=MORE_INLINE,
     )
 
 
@@ -1513,7 +1514,22 @@ async def callback_collect(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "ui:build")
 async def callback_build(callback: CallbackQuery):
-    await finish_callback(callback, "/build", menu_build)
+    await callback.answer()
+    await menu_build(callback_message(callback, "/build"))
+
+
+@dp.callback_query(F.data.startswith("build:"))
+async def callback_build_type(callback: CallbackQuery):
+    await callback.answer()
+    building = callback.data.split(":", 1)[1]
+    if building == "base":
+        await cmd_build_base(callback_message(callback, "/build_base"))
+    elif building in ALL_BUILDINGS:
+        await cmd_build(callback_message(callback, f"/build {building}"))
+    else:
+        await callback.message.answer("Неизвестный тип постройки. Открой строительство заново.")
+        return
+    await callback.message.answer("Меню разделов:", reply_markup=MAIN_INLINE)
 
 
 @dp.callback_query(F.data == "ui:army")
