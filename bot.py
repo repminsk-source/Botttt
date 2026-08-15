@@ -160,6 +160,12 @@ BUILD_INLINE = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="ui:back")],
 ])
 
+COUNTRY_INLINE = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="📊 Сводка", callback_data="ui:country"), InlineKeyboardButton(text="💼 Экономика", callback_data="ui:economy")],
+    [InlineKeyboardButton(text="⚔️ Армия", callback_data="ui:army"), InlineKeyboardButton(text="📈 Прогресс", callback_data="ui:progress")],
+    [InlineKeyboardButton(text="🏗️ Строить", callback_data="ui:build"), InlineKeyboardButton(text="⬅️ Главное меню", callback_data="ui:back")],
+])
+
 
 def callback_message(callback: CallbackQuery, text: str) -> Message:
     """Make a normal Message-shaped object for existing command handlers."""
@@ -419,6 +425,51 @@ async def format_country(c: dict) -> str:
     return text
 
 
+async def format_country_summary(c: dict) -> str:
+    buildings = await db.get_buildings(c["user_id"])
+    progress = progression_snapshot(c, buildings)
+    stage_name = progress["stage"][1]
+    real_population = world_data.format_population(c.get("real_population"))
+    profile_year = c.get("data_year") or "нет года"
+    alliance = await db.get_user_alliance(c["user_id"])
+    alliance_line = f"🤝 {esc(alliance['tag'])} — {esc(alliance['name'])}\n" if alliance else ""
+    next_step = next_step_hint(c, buildings)
+    return (
+        f"🏳️ <b>{esc(c['name'])}</b> · {territory.TIER_LABEL_RU.get(c.get('territory_tier', 'medium'), c.get('territory_tier', 'medium'))}\n"
+        f"{alliance_line}\n"
+        f"<b>Сейчас</b> · этап <b>{esc(stage_name)}</b> · счёт <b>{progress['score']}</b>\n"
+        f"💰 Деньги: <b>{c['gold']:,}</b> · 📦 Ресурсы: <b>{c['resources']:,}</b>\n"
+        f"👥 Население: <b>{c['population']:,}</b> · 🧑‍🤝‍🧑 Резерв: <b>{c['manpower']:,}</b>\n"
+        f"⚔️ Армия: <b>{c['military']:,}</b> · 🏛️ Курс: <b>{esc(config.POLICY_DEFINITIONS.get(c.get('policy', 'development'), config.POLICY_DEFINITIONS['development'])['name'])}</b>\n"
+        f"🛡️ Стабильность: <b>{c['stability']}/100</b> · 🌐 Репутация: <b>{c['reputation']}/100</b>\n\n"
+        f"<b>📚 Реальный профиль ({profile_year})</b>\n"
+        f"👥 Население страны: {real_population}\n\n"
+        f"<b>Следующий шаг</b>\n{next_step}"
+    )
+
+
+async def format_country_economy(c: dict) -> str:
+    buildings = await db.get_buildings(c["user_id"])
+    preview = production_preview(buildings)
+    lines = [
+        f"💼 <b>Экономика {esc(c['name'])}</b>",
+        "",
+        f"💰 Деньги: <b>{c['gold']:,}</b>",
+        f"📦 Ресурсы: <b>{c['resources']:,}</b>",
+        f"🌲 Дерево: <b>{c['wood']:,}</b> · ⛓️ Железо: <b>{c['iron']:,}</b>",
+        f"🪨 Уголь: <b>{c['coal']:,}</b> · 🛢️ Нефть: <b>{c['oil']:,}</b>",
+        f"🌽 Еда: <b>{c['food']:,}</b> · 💧 Вода: <b>{c['water']:,}</b>",
+        f"\n🏗️ Постройки: <b>{sum(max(0, int(v)) for v in buildings.values())}</b> уровней",
+    ]
+    if preview:
+        lines += ["", "<b>Производство за сбор</b>"]
+        lines.extend(f"{RESOURCE_NAMES_RU.get(k, k)}: <b>+{v:,}</b>" for k, v in preview.items())
+    else:
+        lines += ["", "Производства пока нет. Начни с фермы или шахты."]
+    lines += ["", "<b>Следующий шаг:</b> открой «🏗️ Строить» и выбери инфраструктуру."]
+    return "\n".join(lines)
+
+
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     existing = await db.get_country(message.from_user.id)
@@ -557,7 +608,7 @@ async def cmd_country(message: Message):
     if not country:
         await message.answer("У тебя ещё нет страны. Создай через /founding Название")
         return
-    await message.answer(await format_country(country))
+    await message.answer(await format_country_summary(country), reply_markup=COUNTRY_INLINE)
 
 
 @dp.message(Command("progress"))
@@ -1477,7 +1528,7 @@ async def menu_army(message: Message):
         f"Резерв людей: {country['manpower']}\nДеньги: {country['gold']}{demographic_text}\n\n"
         f"Стоимость +1 армии: {config.MOBILIZE_MANPOWER_PER_POINT} резерва + {config.MOBILIZE_GOLD_PER_POINT} денег.\n"
         "Открой команду <code>/mobilize 1</code>, когда будешь готов мобилизовать резерв.",
-        reply_markup=MAIN_INLINE,
+        reply_markup=COUNTRY_INLINE,
     )
 
 
@@ -1504,7 +1555,22 @@ async def callback_back(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "ui:country")
 async def callback_country(callback: CallbackQuery):
-    await finish_callback(callback, "/country", cmd_country)
+    await callback.answer()
+    country = await db.get_country(callback.from_user.id)
+    if not country:
+        await callback.message.answer("Сначала основи страну: <code>/founding Бразилия</code>", reply_markup=MAIN_INLINE)
+        return
+    await callback.message.answer(await format_country_summary(country), reply_markup=COUNTRY_INLINE)
+
+
+@dp.callback_query(F.data == "ui:economy")
+async def callback_economy(callback: CallbackQuery):
+    await callback.answer()
+    country = await db.get_country(callback.from_user.id)
+    if not country:
+        await callback.message.answer("Сначала основи страну: <code>/founding Бразилия</code>", reply_markup=MAIN_INLINE)
+        return
+    await callback.message.answer(await format_country_economy(country), reply_markup=COUNTRY_INLINE)
 
 
 @dp.callback_query(F.data == "ui:collect")

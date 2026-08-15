@@ -7,6 +7,7 @@ import bot
 
 EXPECTED = {
     "ui:country": "callback_country",
+    "ui:economy": "callback_economy",
     "ui:collect": "callback_collect",
     "ui:build": "callback_build",
     "ui:army": "callback_army",
