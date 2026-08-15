@@ -152,6 +152,19 @@ CREATE TABLE IF NOT EXISTS wars (
     verdict_text TEXT,
     created_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pending_wars (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attacker_id INTEGER NOT NULL,
+    attacker_name TEXT NOT NULL,
+    defender_id INTEGER NOT NULL,
+    defender_name TEXT NOT NULL,
+    attack_text TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    defense_text TEXT
+);
 """
 
 # Колонки, которые могли отсутствовать в базах, созданных до этого обновления.
@@ -516,6 +529,7 @@ async def delete_country(user_id: int) -> bool:
     async with _connect() as db:
         await db.execute("DELETE FROM events WHERE user_id = ?", (user_id,))
         await db.execute("DELETE FROM wars WHERE attacker_id = ? OR defender_id = ?", (user_id, user_id))
+        await db.execute("DELETE FROM pending_wars WHERE attacker_id = ? OR defender_id = ?", (user_id, user_id))
         await db.execute("DELETE FROM buildings WHERE user_id = ?", (user_id,))
         await db.execute("DELETE FROM alliance_members WHERE user_id = ?", (user_id,))
         # A deleted player must not leave pending offers that can later be
@@ -924,6 +938,62 @@ async def apply_war_result(
                 (amount_gold, amount_resources, target_id),
             )
 
+        await db.commit()
+
+
+async def create_pending_war(attacker_id: int, attacker_name: str, defender_id: int, defender_name: str, attack_text: str, created_at: int, expires_at: int) -> int | None:
+    async with _connect() as db:
+        cur = await db.execute(
+            "SELECT id FROM pending_wars WHERE attacker_id = ? AND status = 'pending'",
+            (attacker_id,),
+        )
+        if await cur.fetchone():
+            return None
+        cur = await db.execute(
+            "INSERT INTO pending_wars (attacker_id, attacker_name, defender_id, defender_name, attack_text, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (attacker_id, attacker_name, defender_id, defender_name, attack_text, created_at, expires_at),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_pending_war(war_id: int):
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM pending_wars WHERE id = ?", (war_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def list_pending_wars_for_defender(defender_id: int):
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM pending_wars WHERE defender_id = ? AND status = 'pending' ORDER BY id DESC",
+            (defender_id,),
+        )
+        return [dict(row) for row in await cur.fetchall()]
+
+
+async def claim_pending_war(war_id: int, defender_id: int, defense_text: str, timestamp: int) -> bool:
+    async with _connect() as db:
+        cur = await db.execute(
+            "UPDATE pending_wars SET status = 'resolving', defense_text = ? WHERE id = ? AND defender_id = ? AND status = 'pending'",
+            (defense_text, war_id, defender_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def reset_pending_war(war_id: int) -> None:
+    async with _connect() as db:
+        await db.execute("UPDATE pending_wars SET status = 'pending', defense_text = NULL WHERE id = ? AND status = 'resolving'", (war_id,))
+        await db.commit()
+
+
+async def complete_pending_war(war_id: int) -> None:
+    async with _connect() as db:
+        await db.execute("UPDATE pending_wars SET status = 'resolved' WHERE id = ? AND status = 'resolving'", (war_id,))
         await db.commit()
 
 

@@ -18,7 +18,7 @@ def test_command_handlers_are_unique_and_present():
     required = {
         "cmd_start", "cmd_founding", "cmd_country", "cmd_progress", "cmd_top", "cmd_upgrade",
         "cmd_build", "cmd_collect", "cmd_mobilize", "cmd_market", "cmd_buy", "cmd_build_base",
-        "cmd_spy", "cmd_attack", "cmd_wars", "cmd_action", "cmd_year", "cmd_news", "cmd_myid",
+        "cmd_spy", "cmd_attack", "cmd_defend", "cmd_wars", "cmd_action", "cmd_year", "cmd_news", "cmd_myid",
         "cmd_guide", "cmd_policy", "cmd_history", "cmd_alliances", "cmd_alliance_create",
         "cmd_alliance_join", "cmd_alliance_leave", "cmd_alliance_info", "cmd_trade",
         "cmd_trade_offer", "cmd_trade_accept", "cmd_trade_reject", "cmd_world", "cmd_help",

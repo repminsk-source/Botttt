@@ -1217,6 +1217,25 @@ async def cmd_spy(message: Message):
     )
 
 
+_FORBIDDEN_WAR_TERMS = (
+    "космонавт", "единорог", "мопед", "бабуш", "хомяк", "такс", "утюг",
+    "детск", "пластиков", "бамбук", "блогер", "велосипед", "попугай",
+    "сомнамбул", "без скафандр", "мкс", "игрушеч", "кошк", "котят",
+)
+_REALISTIC_WAR_TERMS = (
+    "арм", "войск", "удар", "оборон", "наступ", "десант", "артил", "танк",
+    "ракет", "флот", "авиац", "развед", "мобилиз", "гарнизон", "рубеж",
+    "снабж", "диверс", "пехот", "брон", "позици", "огонь", "склад",
+)
+
+
+def is_realistic_war_scenario(text: str) -> bool:
+    normalized = text.casefold()
+    return not any(term in normalized for term in _FORBIDDEN_WAR_TERMS) and any(
+        term in normalized for term in _REALISTIC_WAR_TERMS
+    )
+
+
 @dp.message(Command("attack"))
 async def cmd_attack(message: Message):
     """/attack user_id описание атаки — война между двумя игроками, вердикт от ИИ"""
@@ -1233,6 +1252,9 @@ async def cmd_attack(message: Message):
     action_text = parts[2].strip()
     if len(action_text) < config.MIN_NARRATIVE_LEN:
         await answer_topic_safe(message, f"Описание атаки должно содержать минимум {config.MIN_NARRATIVE_LEN} символов.")
+        return
+    if not is_realistic_war_scenario(action_text):
+        await answer_topic_safe(message, "Опиши реалистичную военную операцию: силы, цель, направление и способ действий. Фантастические и шуточные сценарии не принимаются.")
         return
     if len(action_text) > config.MAX_ACTION_LEN:
         await answer_topic_safe(message, f"Слишком длинное описание (макс {config.MAX_ACTION_LEN} символов).")
@@ -1279,7 +1301,30 @@ async def cmd_attack(message: Message):
             if attacker_id in _war_inflight:
                 await answer_topic_safe(message, "⏳ Твоя предыдущая атака ещё обрабатывается ведущим. Дождись результата.")
                 return
-            _war_inflight.add(attacker_id)
+            pending_id = await db.create_pending_war(
+                attacker_id, attacker["name"], defender_id, defender["name"],
+                action_text, int(time.time()), int(time.time()) + config.WAR_DEFENSE_WINDOW_SECONDS,
+            )
+            if not pending_id:
+                await answer_topic_safe(message, "У тебя уже есть незавершённая война. Дождись ответа защитника.")
+                return
+            await db.touch_last_attack(attacker_id, int(time.time()))
+            await answer_topic_safe(
+                message,
+                f"⚔️ Атака #{pending_id} объявлена против «{esc(defender['name'])}».\n"
+                "Война не завершена. Защитник должен ответить командой "
+                f"<code>/defend {pending_id} описание обороны</code>.",
+            )
+            try:
+                await bot.send_message(
+                    defender["chat_id"],
+                    f"🛡️ На твою страну объявлена атака #{pending_id}.\n"
+                    f"Атакующий: <b>{esc(attacker['name'])}</b>\n"
+                    f"Ответь: <code>/defend {pending_id} описание обороны</code>",
+                )
+            except Exception:
+                logger.info("Не удалось уведомить защитника о войне %s", pending_id, exc_info=True)
+            return
 
     # Запрос к ИИ намеренно вне локов — чтобы не держать блокировку обоих игроков
     # на десятки секунд, пока ждём ответ модели.
@@ -1370,14 +1415,89 @@ async def cmd_attack(message: Message):
     await thinking_msg.edit_text(result_text)
 
 
+@dp.message(Command("defend"))
+async def cmd_defend(message: Message):
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3 or not parts[1].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/defend номер_войны описание обороны</code>")
+        return
+    defense_text = parts[2].strip()
+    if len(defense_text) < config.MIN_NARRATIVE_LEN:
+        await answer_topic_safe(message, f"Описание обороны должно содержать минимум {config.MIN_NARRATIVE_LEN} символов.")
+        return
+    if not is_realistic_war_scenario(defense_text):
+        await answer_topic_safe(message, "Опиши реалистичную оборону: силы, рубежи, снабжение и способ отражения атаки.")
+        return
+    war_id = int(parts[1])
+    pending = await db.get_pending_war(war_id)
+    if not pending or pending["defender_id"] != message.from_user.id or pending["status"] != "pending":
+        await answer_topic_safe(message, "Такая ожидающая война не найдена или ты не являешься защитником.")
+        return
+    attacker = await db.get_country(pending["attacker_id"])
+    defender = await db.get_country(pending["defender_id"])
+    if not attacker or not defender:
+        await answer_topic_safe(message, "Одна из стран больше не существует. Война отменена без вердикта.")
+        return
+    if not await db.claim_pending_war(war_id, message.from_user.id, defense_text, int(time.time())):
+        await answer_topic_safe(message, "На эту войну уже ответили или она обрабатывается.")
+        return
+    current_year = await db.get_current_year()
+    combined_text = f"Атака: {pending['attack_text']}\nОборона: {defense_text}"
+    thinking_msg = await message.answer("⚔️ Ведущий рассматривает действия атакующей и обороняющейся стороны...")
+    try:
+        verdict = await ai.get_war_verdict(attacker, defender, combined_text, world_context=f"Текущий год мира: {current_year}.")
+        outcome = verdict.get("outcome", "error")
+        if outcome == "error":
+            await db.reset_pending_war(war_id)
+            await thinking_msg.edit_text(esc(verdict.get("verdict_text", "ИИ временно недоступен. Ответ можно отправить снова.")))
+            return
+        attacker_changes = clamp_country_changes(attacker, verdict.get("attacker_stat_changes", {}))
+        defender_changes = clamp_country_changes(defender, verdict.get("defender_stat_changes", {}))
+        loot_gold = loot_resources = 0
+        if outcome == "attacker_win":
+            loot_gold = defender["gold"] * config.WAR_LOOT_PERCENT // 100
+            loot_resources = defender["resources"] * config.WAR_LOOT_PERCENT // 100
+        elif outcome == "defender_win":
+            loot_gold = -(attacker["gold"] * config.WAR_LOOT_PERCENT // 100)
+            loot_resources = -(attacker["resources"] * config.WAR_LOOT_PERCENT // 100)
+        lock_a, lock_b = sorted([pending["attacker_id"], pending["defender_id"]])
+        async with get_user_lock(lock_a):
+            async with get_user_lock(lock_b):
+                if outcome not in ("attacker_win", "defender_win", "draw"):
+                    await db.reset_pending_war(war_id)
+                    await thinking_msg.edit_text("⚠️ Вердикт не содержит допустимого исхода. Война остаётся ожидающей ответа.")
+                    return
+                await db.apply_war_result(pending["attacker_id"], pending["defender_id"], attacker_changes, defender_changes, loot_gold, loot_resources)
+                await db.log_war(pending["attacker_id"], attacker["name"], pending["defender_id"], defender["name"], combined_text, outcome, verdict["verdict_text"])
+                await db.complete_pending_war(war_id)
+        labels = {"attacker_win": f"🏆 Победа {esc(attacker['name'])}!", "defender_win": f"🛡️ {esc(defender['name'])} отстояла свои границы!", "draw": "🤝 Ничья — обе стороны понесли потери."}
+        await thinking_msg.edit_text(f"{labels.get(outcome, 'Исход неясен.')}\n\n{esc(verdict['verdict_text'])}\n\nВойна #{war_id} завершена после ответа обороны.")
+    except Exception:
+        await db.reset_pending_war(war_id)
+        raise
+
+
 @dp.message(Command("wars"))
 async def cmd_wars(message: Message):
-    """/wars — последние военные столкновения между игроками"""
+    """/wars — ожидающие обороны и последние военные столкновения."""
+    pending = await db.list_pending_wars_for_defender(message.from_user.id)
     wars = await db.get_recent_wars(10)
+    lines = []
+    if pending:
+        lines.append("🛡️ <b>Войны, ожидающие твоей обороны</b>")
+        for item in pending:
+            lines.append(
+                f"Атака #{item['id']} от <b>{esc(item['attacker_name'])}</b>\n"
+                f"Ответь: <code>/defend {item['id']} описание обороны</code>"
+            )
+        lines.append("")
     if not wars:
-        await answer_topic_safe(message, "Войн пока не было.")
+        if lines:
+            await answer_topic_safe(message, "\n".join(lines))
+        else:
+            await answer_topic_safe(message, "Войн пока не было.")
         return
-    lines = ["⚔️ <b>Последние столкновения</b>\n"]
+    lines.append("⚔️ <b>Последние столкновения</b>\n")
     for w in wars:
         arrow = {
             "attacker_win": "победил(а)",
