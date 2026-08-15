@@ -9,6 +9,8 @@ from config import (
 
 def _safe_error(error: Exception | None) -> str:
     """Return diagnostics without leaking query-string keys or bearer tokens."""
+    if isinstance(error, json.JSONDecodeError):
+        return "модель вернула некорректный или обрезанный JSON"
     text = str(error or "неизвестная ошибка")
     text = re.sub(r"([?&]key=)[^&\s]+", r"\1[REDACTED]", text, flags=re.IGNORECASE)
     text = re.sub(r"(Bearer\s+)[^\s'\"]+", r"\1[REDACTED]", text, flags=re.IGNORECASE)
@@ -245,51 +247,80 @@ async def _call_gemini(system_prompt: str, user_prompt: str) -> str:
         return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def _extract_json(raw: str) -> dict:
-    """
-    Достаёт JSON-объект из ответа модели. Раньше использовался raw.find("{")/rfind("}"),
-    что ломалось, если verdict_text внутри JSON сам содержал фигурную скобку (закрывающая
-    скобка находилась не там). Теперь ищем ПЕРВЫЙ сбалансированный по скобкам объект,
-    учитывая скобки внутри строковых значений (в кавычках) отдельно.
-    """
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.lower().startswith("json"):
-            raw = raw[4:]
-        raw = raw.strip()
-
-    start = raw.find("{")
-    if start == -1:
-        raise ValueError("Не удалось найти JSON в ответе модели")
-
-    depth = 0
+def _repair_json_candidate(candidate: str) -> str:
+    """Repair only harmless transport defects; never invent missing fields."""
+    repaired = candidate.replace("\ufeff", "")
+    chars = []
     in_string = False
-    escape = False
-    for i in range(start, len(raw)):
-        ch = raw[i]
+    escaped = False
+    for ch in repaired:
         if in_string:
-            if escape:
-                escape = False
+            if escaped:
+                escaped = False
             elif ch == "\\":
-                escape = True
+                escaped = True
             elif ch == '"':
                 in_string = False
-            continue
-        if ch == '"':
+            elif ch == "\n":
+                ch = "\\n"
+            elif ch == "\r":
+                ch = "\\r"
+            elif ch == "\t":
+                ch = "\\t"
+        elif ch == '"':
             in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return json.loads(raw[start:i + 1])
+        chars.append(ch)
+    repaired = "".join(chars)
+    return re.sub(r",(\s*[}\]])", r"\1", repaired)
 
-    # Скобки не сбалансировались (модель обрезала ответ) — пробуем regex как последний шанс.
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if match:
-        return json.loads(match.group(0))
-    raise ValueError("Не удалось найти сбалансированный JSON в ответе модели")
+
+def _extract_json(raw: str) -> dict:
+    """Extract the first valid JSON object from plain, markdown, or noisy model output."""
+    if not isinstance(raw, str):
+        raise ValueError("Ответ модели не является текстом")
+    raw = raw.strip().lstrip("\ufeff")
+    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\s*```\s*$", "", raw)
+    decoder = json.JSONDecoder()
+    for start, char in enumerate(raw):
+        if char != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(raw[start:])
+            if isinstance(value, dict):
+                return value
+        except json.JSONDecodeError:
+            pass
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(start, len(raw)):
+            ch = raw[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = raw[start:index + 1]
+                    for item in (candidate, _repair_json_candidate(candidate)):
+                        try:
+                            value = json.loads(item)
+                            if isinstance(value, dict):
+                                return value
+                        except json.JSONDecodeError:
+                            continue
+                    break
+    raise ValueError("Не удалось извлечь корректный JSON из ответа модели")
 
 
 def _clamp_changes(changes: dict, max_delta: int, max_sum_positive: int | None = None) -> dict:
@@ -359,14 +390,18 @@ async def _get_raw(system_prompt: str, user_prompt: str) -> tuple[str, Exception
         callers = [_call_ollama] if OLLAMA_ENABLED else []
         callers.extend((_call_grok, _call_gemini))
     for caller in callers:
-        try:
-            raw = await caller(system_prompt, user_prompt)
-            # Проверяем JSON до возврата: если Grok ответил мусором, пробуем Gemini.
-            _extract_json(raw)
-            return raw, None
-        except Exception as e:
-            last_error = e
-            continue
+        for attempt in range(2):
+            try:
+                raw = await caller(system_prompt, user_prompt)
+                # Проверяем JSON до возврата. Один повтор помогает при обрезанном
+                # ответе Ollama, не меняя порядок явно выбранных провайдеров.
+                _extract_json(raw)
+                return raw, None
+            except Exception as e:
+                last_error = e
+                if attempt == 0:
+                    continue
+                break
     if last_error is None:
         last_error = RuntimeError(
             f"AI provider '{AI_PROVIDER}' is not available or is disabled"
