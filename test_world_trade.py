@@ -29,6 +29,7 @@ async def main():
         await db.update_resource(3001, "wood", 1000)
         contract_id = await db.create_trade_contract(3001, 3002, "wood", 500, 700, int(__import__("time").time()) + 3600)
         assert contract_id
+        assert not await db.accept_trade_contract(contract_id, 3001)
         assert await db.accept_trade_contract(contract_id, 3002)
         alpha = await db.get_country(3001)
         beta = await db.get_country(3002)

@@ -248,7 +248,7 @@ PROGRESS_INLINE = InlineKeyboardMarkup(inline_keyboard=[
 
 
 def callback_message(callback: CallbackQuery, text: str) -> Message:
-    """Make a normal Message-shaped object for existing command handlers."""
+    """Route a callback action under the clicker's identity, never the card author."""
     return callback.message.model_copy(update={"from_user": callback.from_user, "text": text})
 
 
