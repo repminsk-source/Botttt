@@ -166,6 +166,24 @@ COUNTRY_INLINE = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="🏗️ Строить", callback_data="ui:build"), InlineKeyboardButton(text="⬅️ Главное меню", callback_data="ui:back")],
 ])
 
+ECONOMY_INLINE = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="📥 Собрать ресурсы", callback_data="eco:collect")],
+    [InlineKeyboardButton(text="🏗️ Строить", callback_data="ui:build"), InlineKeyboardButton(text="🛒 Рынок", callback_data="eco:market")],
+    [InlineKeyboardButton(text="📊 Сводка", callback_data="ui:country"), InlineKeyboardButton(text="⬅️ Главное меню", callback_data="ui:back")],
+])
+
+ARMY_INLINE = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="⚔️ Мобилизовать 1", callback_data="army:mobilize:1")],
+    [InlineKeyboardButton(text="🪖 Построить базу", callback_data="army:base")],
+    [InlineKeyboardButton(text="📊 Сводка", callback_data="ui:country"), InlineKeyboardButton(text="💼 Экономика", callback_data="ui:economy")],
+    [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="ui:back")],
+])
+
+PROGRESS_INLINE = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="📥 Собрать", callback_data="ui:collect"), InlineKeyboardButton(text="🏗️ Строить", callback_data="ui:build")],
+    [InlineKeyboardButton(text="📊 Сводка", callback_data="ui:country"), InlineKeyboardButton(text="⬅️ Главное меню", callback_data="ui:back")],
+])
+
 
 def callback_message(callback: CallbackQuery, text: str) -> Message:
     """Make a normal Message-shaped object for existing command handlers."""
@@ -668,7 +686,7 @@ async def cmd_progress(message: Message):
     else:
         lines += ["", "Ты достиг верхнего этапа развития. Дальше главная цель — влияние через действия, войны и альянсы."]
     lines += ["", next_step_hint(country, buildings)]
-    await message.answer("\n".join(lines), reply_markup=MAIN_INLINE)
+    await message.answer("\n".join(lines), reply_markup=PROGRESS_INLINE)
 
 
 @dp.message(Command("top"))
@@ -1527,8 +1545,8 @@ async def menu_army(message: Message):
         f"Игровое население: {country['population']:,} · нужно {config.MOBILIZE_POPULATION_PER_POINT} на 1 единицу армии\n"
         f"Резерв людей: {country['manpower']}\nДеньги: {country['gold']}{demographic_text}\n\n"
         f"Стоимость +1 армии: {config.MOBILIZE_MANPOWER_PER_POINT} резерва + {config.MOBILIZE_GOLD_PER_POINT} денег.\n"
-        "Открой команду <code>/mobilize 1</code>, когда будешь готов мобилизовать резерв.",
-        reply_markup=COUNTRY_INLINE,
+        "Выбери действие ниже — вводить команды вручную не нужно.",
+        reply_markup=ARMY_INLINE,
     )
 
 
@@ -1570,7 +1588,27 @@ async def callback_economy(callback: CallbackQuery):
     if not country:
         await callback.message.answer("Сначала основи страну: <code>/founding Бразилия</code>", reply_markup=MAIN_INLINE)
         return
-    await callback.message.answer(await format_country_economy(country), reply_markup=COUNTRY_INLINE)
+    await callback.message.answer(await format_country_economy(country), reply_markup=ECONOMY_INLINE)
+
+
+@dp.callback_query(F.data == "eco:collect")
+async def callback_economy_collect(callback: CallbackQuery):
+    await finish_callback(callback, "/collect", cmd_collect, ECONOMY_INLINE)
+
+
+@dp.callback_query(F.data == "eco:market")
+async def callback_economy_market(callback: CallbackQuery):
+    await finish_callback(callback, "/market", cmd_market, ECONOMY_INLINE)
+
+
+@dp.callback_query(F.data == "army:mobilize:1")
+async def callback_army_mobilize(callback: CallbackQuery):
+    await finish_callback(callback, "/mobilize 1", cmd_mobilize, ARMY_INLINE)
+
+
+@dp.callback_query(F.data == "army:base")
+async def callback_army_base(callback: CallbackQuery):
+    await finish_callback(callback, "/build_base", cmd_build_base, ARMY_INLINE)
 
 
 @dp.callback_query(F.data == "ui:collect")
