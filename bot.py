@@ -222,14 +222,21 @@ def callback_message(callback: CallbackQuery, text: str) -> Message:
 
 
 async def finish_callback(callback: CallbackQuery, command: str, handler, markup=MAIN_INLINE):
+    """Run a callback command without overwriting its freshly rendered card."""
     await callback.answer()
+    owner_id = callback.from_user.id
+    key = _interface_key(callback.message, owner_id)
+    previous_id = _ACTIVE_INTERFACE_MESSAGES.get(key)
     await handler(callback_message(callback, command))
-    if markup is not None:
+    current_id = _ACTIVE_INTERFACE_MESSAGES.get(key)
+    # Most command handlers now render their own final card. Only append a
+    # fallback menu when a handler produced no interface message at all.
+    if markup is not None and current_id == previous_id:
         await answer_topic_safe(
             callback.message,
             "Меню разделов:",
             reply_markup=markup,
-            owner_id=callback.from_user.id,
+            owner_id=owner_id,
         )
 
 
