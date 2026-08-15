@@ -7,7 +7,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
 # --- AI providers ---
-# Grok — основной провайдер, Gemini — запасной (используется, если Grok недоступен/упал).
+# Ollama Cloud — основной провайдер; Grok и Gemini остаются необязательными резервами.
 GROK_API_KEY = os.getenv("GROK_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
@@ -293,9 +293,7 @@ MAX_ARMY_POPULATION_SHARE = 0.20
 # --- Военные базы ---
 # Одна база стоит золото+ресурсы (растёт с числом уже построенных баз) и требует
 # минимального уровня армии. Максимум баз = TERRITORY_BASE_BONUS[tier] + military // MILITARY_PER_BASE.
-# Каждые 25 единиц армии открывают ещё одну базу сверх территориального минимума.
-# Каждые 10 единиц армии открывают ещё одну базу сверх территориального минимума.
-# Legacy value removed: MILITARY_PER_BASE is defined above as 30 soldiers-units per base.
+# Каждые 30 внутренних единиц армии открывают ещё одну базу сверх территориального минимума.
 BASE_COST_GOLD = 5000
 BASE_COST_RESOURCES = 3000
 

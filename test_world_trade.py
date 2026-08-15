@@ -39,6 +39,24 @@ async def main():
         second = await db.create_trade_contract(3001, 3002, "wood", 100, 10)
         assert second and not await db.reject_trade_contract(second, 3001)
         assert await db.reject_trade_contract(second, 3002)
+
+        profile["iso_code"] = "CCC"
+        assert await db.create_country(3003, 3, "Гамма", "small", profile)
+        alliance_id = await db.create_alliance("AUD", "Аудит")
+        assert alliance_id
+        alliance = await db.get_alliance_by_tag("AUD")
+        await db.join_alliance(3001, alliance["id"])
+        transferred_contract = await db.create_trade_contract(3001, 3003, "wood", 10, 10)
+        assert transferred_contract
+        assert await db.transfer_country(3001, 3004)
+        transferred = await db.get_trade_contract(transferred_contract)
+        assert transferred["proposer_id"] == 3004 and transferred["target_id"] == 3003
+        assert (await db.get_user_alliance(3004))["tag"] == "AUD"
+        assert await db.get_country(3001) is None
+
+        assert await db.delete_country(3004)
+        cancelled = await db.get_trade_contract(transferred_contract)
+        assert cancelled["status"] == "cancelled"
         print("WORLD_TRADE_OK")
     finally:
         db.DB_PATH = old_path

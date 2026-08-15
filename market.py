@@ -16,7 +16,8 @@ def get_price(resource: str) -> int:
     resource = resource.lower()
     if resource not in config.RESOURCE_BUY_PRICE_GOLD:
         raise KeyError(resource)
-    tick = int(time.time()) // config.MARKET_TICK_SECONDS
+    tick_seconds = max(1, int(config.MARKET_TICK_SECONDS))
+    tick = int(time.time()) // tick_seconds
     base = config.RESOURCE_BUY_PRICE_GOLD[resource]
     return max(1, round(base * _multiplier(resource, tick)))
 

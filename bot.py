@@ -356,6 +356,9 @@ async def animate(message: Message, frames: list[str], delay: float = 0.25):
             await sent.edit_text(frame)
         except TelegramBadRequest:
             break
+    # Treat the finished animation as the player's active interface card. The
+    # next safe response will replace it just like any other menu.
+    _ACTIVE_INTERFACE_MESSAGES[_interface_key(message)] = sent.message_id
     return sent
 
 
@@ -517,10 +520,10 @@ async def cmd_start(message: Message):
     existing = await db.get_country(message.from_user.id)
     if existing:
         await animate(message, ["🌍 Загружаю твою державу…", "✅ С возвращением в ВПИ ГАВАНЬ!"])
-        await message.answer("Начни с кнопки «📊 Моя страна». Я буду подсказывать следующий шаг.", reply_markup=MAIN_INLINE)
+        await answer_topic_safe(message, "Начни с кнопки «📊 Моя страна». Я буду подсказывать следующий шаг.", reply_markup=MAIN_INLINE)
         return
     await animate(message, ["🌍 Добро пожаловать в ВПИ ГАВАНЬ…", "🗺️ Здесь ты строишь страну, развиваешь армию и влияешь на мир."])
-    await message.answer(
+    await answer_topic_safe(message,
         "<b>Начинаем с одного шага:</b> напиши название реальной страны.\n\n"
         "Пример: <code>/founding Бразилия</code>\n\n"
         "После основания я покажу, что делать дальше.",
@@ -538,18 +541,18 @@ async def cmd_founding(message: Message):
     # в несколько "строк" интерфейса и не пряталось за счёт \n внутри <b>...</b>.
     name = " ".join(name.split())
     if not name:
-        await message.answer(
+        await answer_topic_safe(message,
             "Играть можно только за реально существующую страну мира.\n"
             "Укажи название: <code>/founding Бразилия</code>"
         )
         return
     if len(name) > 64:
-        await message.answer("Слишком длинное название страны (макс 64 символа).")
+        await answer_topic_safe(message, "Слишком длинное название страны (макс 64 символа).")
         return
 
     canonical = countries.match_country(name)
     if canonical is None:
-        await message.answer(
+        await answer_topic_safe(message,
             f"«{esc(name)}» не похоже на название реальной страны.\n"
             "В этой игре можно основать только существующую страну мира — например: "
             "<code>/founding Бразилия</code>, <code>/founding Египет</code>, <code>/founding Индонезия</code>."
@@ -559,27 +562,27 @@ async def cmd_founding(message: Message):
     async with get_user_lock(message.from_user.id):
         existing = await db.get_country(message.from_user.id)
         if existing:
-            await message.answer("У тебя уже есть страна. Используй /country чтобы посмотреть её.")
+            await answer_topic_safe(message, "У тебя уже есть страна. Используй /country чтобы посмотреть её.")
             return
 
     async with _founding_lock:
         taken = await db.get_country_by_name(canonical)
         if taken:
-            await message.answer(f"«{esc(canonical)}» уже занята другим игроком. Выбери другую страну.")
+            await answer_topic_safe(message, f"«{esc(canonical)}» уже занята другим игроком. Выбери другую страну.")
             return
         tier = territory.get_tier(canonical)
         profile = world_data.get_profile(canonical, config.START_DATA_YEAR)
         # Фактическое население хранится отдельно; игровое население начинается с нуля.
         created = await db.create_country(message.from_user.id, message.chat.id, canonical, tier, profile)
         if not created:
-            await message.answer(f"«{esc(canonical)}» уже занята другим игроком. Выбери другую страну.")
+            await answer_topic_safe(message, f"«{esc(canonical)}» уже занята другим игроком. Выбери другую страну.")
             return
         country = await db.get_country(message.from_user.id)
         if not country:
-            await message.answer("Не удалось сохранить страну. Повтори попытку позже.")
+            await answer_topic_safe(message, "Не удалось сохранить страну. Повтори попытку позже.")
             return
 
-    await message.answer(
+    await answer_topic_safe(message,
         f"Страна основана! 🎉\n\n{await format_country_summary(country)}",
         reply_markup=MAIN_INLINE,
     )
@@ -598,20 +601,20 @@ async def cmd_policy(message: Message):
         lines = [f"<b>🏛️ Национальная политика</b>\nТекущий курс: <b>{current['name']}</b>", current["description"], "", "Сменить курс можно раз в 30 минут:"]
         for key, policy in config.POLICY_DEFINITIONS.items():
             lines.append(f"<code>/policy {key}</code> — {policy['name']}: {policy['description']}")
-        await message.answer("\n".join(lines))
+        await answer_topic_safe(message, "\n".join(lines))
         return
     policy_key = parts[1].lower()
     policy = config.POLICY_DEFINITIONS.get(policy_key)
     if not policy:
-        await message.answer("Неизвестный курс. Используй <code>/policy</code>, чтобы увидеть доступные варианты.")
+        await answer_topic_safe(message, "Неизвестный курс. Используй <code>/policy</code>, чтобы увидеть доступные варианты.")
         return
     now = int(time.time())
     async with get_user_lock(message.from_user.id):
         changed = await db.set_policy(message.from_user.id, policy_key, now, config.POLICY_COOLDOWN_SECONDS)
     if not changed:
-        await message.answer("Политику можно менять не чаще одного раза в 30 минут.")
+        await answer_topic_safe(message, "Политику можно менять не чаще одного раза в 30 минут.")
         return
-    await message.answer(f"🏛️ Новый национальный курс: <b>{policy['name']}</b>\n{policy['description']}")
+    await answer_topic_safe(message, f"🏛️ Новый национальный курс: <b>{policy['name']}</b>\n{policy['description']}")
 
 
 @dp.message(Command("history"))
@@ -623,11 +626,11 @@ async def cmd_history(message: Message):
         own = await db.get_country(message.from_user.id)
         canonical = own.get("name") if own else None
     if not canonical:
-        await message.answer("Укажи страну или сначала основи свою: <code>/history Россия</code>.")
+        await answer_topic_safe(message, "Укажи страну или сначала основи свою: <code>/history Россия</code>.")
         return
     history = world_data.get_history(canonical)
     if not history:
-        await message.answer("Исторические данные для этой страны пока не найдены.")
+        await answer_topic_safe(message, "Исторические данные для этой страны пока не найдены.")
         return
     by_year = {int(row["year"]): row for row in history}
     years = [year for year in (1990, 2000, 2010, 2020) if year in by_year]
@@ -641,16 +644,16 @@ async def cmd_history(message: Message):
             f"продолжительность жизни {world_data.format_life_expectancy(row.get('life_expectancy'))}"
         )
     lines.append("\nДанные относятся к фактической стране. Игровые ресурсы, здания и таймеры не являются реальными бюджетами страны.")
-    await message.answer("\n".join(lines), reply_markup=MAIN_INLINE)
+    await answer_topic_safe(message, "\n".join(lines), reply_markup=MAIN_INLINE)
 
 
 @dp.message(Command("country"))
 async def cmd_country(message: Message):
     country = await db.get_country(message.from_user.id)
     if not country:
-        await message.answer("У тебя ещё нет страны. Создай через /founding Название")
+        await answer_topic_safe(message, "У тебя ещё нет страны. Создай через /founding Название")
         return
-    await message.answer(await format_country_summary(country), reply_markup=COUNTRY_INLINE)
+    await answer_topic_safe(message, await format_country_summary(country), reply_markup=COUNTRY_INLINE)
 
 
 @dp.message(Command("progress"))
@@ -691,14 +694,14 @@ async def cmd_progress(message: Message):
     if active_timers:
         lines += ["", "⏱️ " + " · ".join(active_timers)]
     lines += ["", next_step_hint(country, buildings)]
-    await message.answer("\n".join(lines), reply_markup=PROGRESS_INLINE)
+    await answer_topic_safe(message, "\n".join(lines), reply_markup=PROGRESS_INLINE)
 
 
 @dp.message(Command("top"))
 async def cmd_top(message: Message):
     countries = await db.get_all_countries()
     if not countries:
-        await message.answer("Пока никто не зарегистрировал страну.")
+        await answer_topic_safe(message, "Пока никто не зарегистрировал страну.")
         return
     scored = []
     for c in countries:
@@ -708,7 +711,7 @@ async def cmd_top(message: Message):
     lines = ["🏆 <b>Рейтинг стран</b>\n"]
     for i, (total, c) in enumerate(scored[:15], start=1):
         lines.append(f"{i}. {esc(c['name'])} — {total} очков развития")
-    await message.answer("\n".join(lines), reply_markup=MAIN_INLINE)
+    await answer_topic_safe(message, "\n".join(lines), reply_markup=MAIN_INLINE)
 
 
 def _economy_upgrade_cost(current_level: int, amount: int) -> int:
@@ -724,7 +727,7 @@ async def cmd_upgrade(message: Message):
     """/upgrade характеристика количество — прокачка за очки развития"""
     parts = message.text.split()
     if len(parts) != 3:
-        await message.answer(
+        await answer_topic_safe(message,
             "Формат: <code>/upgrade характеристика количество</code>\n"
             "Характеристики: economy, military, population, tech, diplomacy\n"
             "Пример: <code>/upgrade tech 3</code>\n\n"
@@ -735,27 +738,27 @@ async def cmd_upgrade(message: Message):
     _, stat, amount_str = parts
     stat = stat.lower()
     if stat not in STAT_NAMES_RU:
-        await message.answer("Неизвестная характеристика. Доступно: economy, military, population, tech, diplomacy")
+        await answer_topic_safe(message, "Неизвестная характеристика. Доступно: economy, military, population, tech, diplomacy")
         return
     if stat == "military":
-        await message.answer("Армия качается через /mobilize количество — нужны резерв людей и деньги.")
+        await answer_topic_safe(message, "Армия качается через /mobilize количество — нужны резерв людей и деньги.")
         return
     if not amount_str.isdigit() or int(amount_str) <= 0:
-        await message.answer("Количество должно быть положительным числом.")
+        await answer_topic_safe(message, "Количество должно быть положительным числом.")
         return
     amount = int(amount_str)
     if amount > config.MAX_UPGRADE_PER_ACTION:
-        await message.answer(f"За одну команду можно улучшить максимум на {config.MAX_UPGRADE_PER_ACTION}. Повтори позже.")
+        await answer_topic_safe(message, f"За одну команду можно улучшить максимум на {config.MAX_UPGRADE_PER_ACTION}. Повтори позже.")
         return
 
     async with get_user_lock(message.from_user.id):
         country = await db.get_country(message.from_user.id)
         if not country:
-            await message.answer("Сначала создай страну: /founding Название")
+            await answer_topic_safe(message, "Сначала создай страну: /founding Название")
             return
         remaining = cooldown_remaining(country, "upgrade", config.UPGRADE_COOLDOWN_SECONDS)
         if remaining:
-            await message.answer(cooldown_text("Следующее улучшение доступно", remaining))
+            await answer_topic_safe(message, cooldown_text("Следующее улучшение доступно", remaining))
             return
 
         if stat == "economy":
@@ -764,18 +767,18 @@ async def cmd_upgrade(message: Message):
             cost = amount * config.UPGRADE_COST
 
         if country["points"] < cost:
-            await message.answer(f"Недостаточно очков развития. Нужно {cost}, у тебя {country['points']}.")
+            await answer_topic_safe(message, f"Недостаточно очков развития. Нужно {cost}, у тебя {country['points']}.")
             return
 
         applied = await db.apply_upgrade(message.from_user.id, stat, amount, cost)
         if not applied:
-            await message.answer("Очки развития изменились во время операции. Повтори команду.")
+            await answer_topic_safe(message, "Очки развития изменились во время операции. Повтори команду.")
             return
         await db.touch_cooldown(message.from_user.id, "upgrade", int(time.time()))
 
         updated = await db.get_country(message.from_user.id)
 
-    await message.answer(
+    await answer_topic_safe(message,
         f"✅ {STAT_NAMES_RU[stat]} увеличена на {amount} (потрачено {cost} очков).\n\n{await format_country_summary(updated)}"
     )
 
@@ -786,7 +789,7 @@ async def cmd_build(message: Message):
     parts = message.text.split()
     if len(parts) != 2 or parts[1].lower() not in ALL_BUILDINGS:
         options = ", ".join(f"{k} ({v['name']})" for k, v in ALL_BUILDINGS.items())
-        await message.answer(f"Формат: <code>/build тип</code>\nДоступно: {options}")
+        await answer_topic_safe(message, f"Формат: <code>/build тип</code>\nДоступно: {options}")
         return
     b_type = parts[1].lower()
     info = ALL_BUILDINGS[b_type]
@@ -794,16 +797,16 @@ async def cmd_build(message: Message):
     async with get_user_lock(message.from_user.id):
         country = await db.get_country(message.from_user.id)
         if not country:
-            await message.answer("Сначала создай страну: /founding Название")
+            await answer_topic_safe(message, "Сначала создай страну: /founding Название")
             return
         remaining = cooldown_remaining(country, "build", config.BUILD_COOLDOWN_SECONDS)
         if remaining:
-            await message.answer(cooldown_text("Следующее строительство доступно", remaining))
+            await answer_topic_safe(message, cooldown_text("Следующее строительство доступно", remaining))
             return
 
         required_tech = config.TECH_GATE_BUILDINGS.get(b_type, 0)
         if country["tech"] < required_tech:
-            await message.answer(
+            await answer_topic_safe(message,
                 f"🔬 Для постройки {info['name']} нужен уровень технологий {required_tech}. "
                 f"Сейчас: {country['tech']}. Используй <code>/upgrade tech 1</code>."
             )
@@ -813,7 +816,7 @@ async def cmd_build(message: Message):
         tier = country.get("territory_tier", "medium")
         level_cap = config.TERRITORY_BUILDING_LEVEL_CAP.get(tier, config.TERRITORY_BUILDING_LEVEL_CAP["medium"])
         if level + 1 > level_cap:
-            await message.answer(
+            await answer_topic_safe(message,
                 f"Территория страны не позволяет строить {info['name']} выше уровня {level_cap} "
                 f"({territory.TIER_LABEL_RU.get(tier, tier)})."
             )
@@ -822,7 +825,7 @@ async def cmd_build(message: Message):
         cost_gold = info["cost_gold"] * (level + 1)
         cost_resources = info["cost_resources"] * (level + 1)
         if country["gold"] < cost_gold or country["resources"] < cost_resources:
-            await message.answer(
+            await answer_topic_safe(message,
                 f"Недостаточно ресурсов для улучшения {info['name']} до ур. {level + 1}.\n"
                 f"Нужно: 💰{cost_gold} денег, 📦{cost_resources} ресурсов.\n"
                 f"У тебя: 💰{country['gold']}, 📦{country['resources']}."
@@ -833,11 +836,11 @@ async def cmd_build(message: Message):
             message.from_user.id, b_type, cost_gold, cost_resources
         )
         if not applied:
-            await message.answer("Ресурсы изменились во время операции. Повтори команду.")
+            await answer_topic_safe(message, "Ресурсы изменились во время операции. Повтори команду.")
             return
         await db.touch_cooldown(message.from_user.id, "build", int(time.time()))
 
-    await message.answer(
+    await answer_topic_safe(message,
         f"🏗️ {info['emoji']} {info['name']} улучшена до уровня {level + 1}!\n"
         f"Даёт {info['produces_name']} при каждом /collect."
     )
@@ -849,12 +852,12 @@ async def cmd_collect(message: Message):
     async with get_user_lock(message.from_user.id):
         country = await db.get_country(message.from_user.id)
         if not country:
-            await message.answer("Сначала создай страну: /founding Название")
+            await answer_topic_safe(message, "Сначала создай страну: /founding Название")
             return
 
         remaining = cooldown_remaining(country, "collect", config.COLLECT_COOLDOWN_SECONDS)
         if remaining:
-            await message.answer(cooldown_text("Следующий сбор доступен", remaining))
+            await answer_topic_safe(message, cooldown_text("Следующий сбор доступен", remaining))
             return
 
         is_first_collect = int(country.get("last_collect_at", 0) or 0) == 0
@@ -906,7 +909,7 @@ async def cmd_collect(message: Message):
             stability_delta,
         )
         if not applied:
-            await message.answer("Состояние страны изменилось во время сбора. Повтори команду.")
+            await answer_topic_safe(message, "Состояние страны изменилось во время сбора. Повтори команду.")
             return
 
     lines = ["📥 <b>Сбор ресурсов</b>\n"]
@@ -924,7 +927,7 @@ async def cmd_collect(message: Message):
     if population_growth > 0:
         lines.append(f"👥 Население: +{population_growth} (от накопленной еды)")
 
-    await message.answer("\n".join(lines))
+    await answer_topic_safe(message, "\n".join(lines))
 
 
 @dp.message(Command("mobilize"))
@@ -932,36 +935,36 @@ async def cmd_mobilize(message: Message):
     """/mobilize количество — прокачать армию за резерв людей + деньги"""
     parts = message.text.split()
     if len(parts) != 2 or not parts[1].isdigit() or int(parts[1]) <= 0:
-        await message.answer(
+        await answer_topic_safe(message,
             f"Формат: <code>/mobilize количество</code>\n"
             f"Стоимость 1 пункта армии: {config.MOBILIZE_MANPOWER_PER_POINT} резерва людей + {config.MOBILIZE_GOLD_PER_POINT} денег."
         )
         return
     amount = int(parts[1])
     if amount > config.MAX_MOBILIZE_PER_ACTION:
-        await message.answer(f"За одну мобилизацию можно добавить максимум {config.MAX_MOBILIZE_PER_ACTION} пунктов армии.")
+        await answer_topic_safe(message, f"За одну мобилизацию можно добавить максимум {config.MAX_MOBILIZE_PER_ACTION} пунктов армии.")
         return
 
     async with get_user_lock(message.from_user.id):
         country = await db.get_country(message.from_user.id)
         if not country:
-            await message.answer("Сначала создай страну: /founding Название")
+            await answer_topic_safe(message, "Сначала создай страну: /founding Название")
             return
         remaining = cooldown_remaining(country, "mobilize", config.MOBILIZE_COOLDOWN_SECONDS)
         if remaining:
-            await message.answer(cooldown_text("Следующая мобилизация доступна", remaining))
+            await answer_topic_safe(message, cooldown_text("Следующая мобилизация доступна", remaining))
             return
 
         base_capacity = country["military_bases"] * config.MILITARY_PER_BASE
         if country["military"] + amount > base_capacity:
-            await message.answer(
+            await answer_topic_safe(message,
                 f"Недостаточно военных баз. Текущая вместимость: {base_capacity * config.MILITARY_UNIT_SIZE:,} военнослужащих.\n"
                 f"Построй дополнительные базы через /build_base."
             )
             return
         population_required = amount * config.MOBILIZE_POPULATION_PER_POINT
         if country["population"] < population_required:
-            await message.answer(
+            await answer_topic_safe(message,
                 f"Недостаточно игрового населения для мобилизации. Нужно: {population_required:,}.\n"
                 f"У тебя: {country['population']:,}. Развивай фермы, амбары и население через /collect."
             )
@@ -970,7 +973,7 @@ async def cmd_mobilize(message: Message):
         if country.get("real_population"):
             factual_capacity = int(country["real_population"] * config.MAX_ARMY_POPULATION_SHARE / config.MILITARY_UNIT_SIZE)
         if factual_capacity is not None and country["military"] + amount > factual_capacity:
-            await message.answer(
+            await answer_topic_safe(message,
                 f"Достигнут демографический предел армии: {factual_capacity:,} внутренних единиц."
             )
             return
@@ -978,7 +981,7 @@ async def cmd_mobilize(message: Message):
         cost_gold = amount * config.MOBILIZE_GOLD_PER_POINT
 
         if country["manpower"] < cost_manpower or country["gold"] < cost_gold:
-            await message.answer(
+            await answer_topic_safe(message,
                 f"Недостаточно ресурсов для мобилизации +{amount} к армии.\n"
                 f"Нужно: 🧑‍🤝‍🧑{cost_manpower} резерва, 💰{cost_gold} денег.\n"
                 f"У тебя: 🧑‍🤝‍🧑{country['manpower']}, 💰{country['gold']}."
@@ -989,10 +992,10 @@ async def cmd_mobilize(message: Message):
             message.from_user.id, cost_manpower, cost_gold, amount, int(time.time())
         )
         if not applied:
-            await message.answer("Ресурсы изменились во время операции. Повтори команду.")
+            await answer_topic_safe(message, "Ресурсы изменились во время операции. Повтори команду.")
             return
 
-    await message.answer(f"⚔️ Армия усилена на {amount}! Потрачено: 🧑‍🤝‍🧑{cost_manpower}, 💰{cost_gold}.")
+    await answer_topic_safe(message, f"⚔️ Армия усилена на {amount}! Потрачено: 🧑‍🤝‍🧑{cost_manpower}, 💰{cost_gold}.")
 
 
 @dp.message(Command("market"))
@@ -1008,7 +1011,7 @@ async def cmd_market(message: Message):
         lines.append(f"{RESOURCE_NAMES_RU[resource]}: 💰{price}/ед. {arrow}")
     lines.append(f"\n⏳ Цены обновятся через ~{mins} мин.")
     lines.append("Купить: <code>/buy ресурс количество</code>")
-    await message.answer("\n".join(lines))
+    await answer_topic_safe(message, "\n".join(lines))
 
 
 @dp.message(Command("buy"))
@@ -1022,7 +1025,7 @@ async def cmd_buy(message: Message):
         or int(parts[2]) <= 0
     ):
         options = ", ".join(config.RESOURCE_BUY_PRICE_GOLD.keys())
-        await message.answer(
+        await answer_topic_safe(message,
             f"Формат: <code>/buy ресурс количество</code>\nДоступно: {options}\nТекущие цены — /market"
         )
         return
@@ -1030,7 +1033,7 @@ async def cmd_buy(message: Message):
     resource = parts[1].lower()
     amount = int(parts[2])
     if amount > config.MAX_BUY_PER_ORDER:
-        await message.answer(f"Максимум за одну покупку: {config.MAX_BUY_PER_ORDER}.")
+        await answer_topic_safe(message, f"Максимум за одну покупку: {config.MAX_BUY_PER_ORDER}.")
         return
 
     # Цену фиксируем один раз до входа в лок — рынок общий для всех, отдельно
@@ -1042,22 +1045,22 @@ async def cmd_buy(message: Message):
     async with get_user_lock(message.from_user.id):
         country = await db.get_country(message.from_user.id)
         if not country:
-            await message.answer("Сначала создай страну: /founding Название")
+            await answer_topic_safe(message, "Сначала создай страну: /founding Название")
             return
         remaining = cooldown_remaining(country, "buy", config.BUY_COOLDOWN_SECONDS)
         if remaining:
-            await message.answer(cooldown_text("Следующая покупка доступна", remaining))
+            await answer_topic_safe(message, cooldown_text("Следующая покупка доступна", remaining))
             return
         if country["gold"] < price:
-            await message.answer(f"Недостаточно денег. Нужно 💰{price} (цена {price_per_unit}/ед.), у тебя 💰{country['gold']}.")
+            await answer_topic_safe(message, f"Недостаточно денег. Нужно 💰{price} (цена {price_per_unit}/ед.), у тебя 💰{country['gold']}.")
             return
         applied = await db.apply_purchase(message.from_user.id, resource, amount, price)
         if not applied:
-            await message.answer("Деньги изменилось во время операции. Повтори покупку.")
+            await answer_topic_safe(message, "Деньги изменилось во время операции. Повтори покупку.")
             return
         await db.touch_cooldown(message.from_user.id, "buy", int(time.time()))
 
-    await message.answer(
+    await answer_topic_safe(message,
         f"🛒 Куплено {RESOURCE_NAMES_RU[resource]}: +{amount} по 💰{price_per_unit}/ед. (итого 💰{price})."
     )
 
@@ -1068,17 +1071,17 @@ async def cmd_build_base(message: Message):
     async with get_user_lock(message.from_user.id):
         country = await db.get_country(message.from_user.id)
         if not country:
-            await message.answer("Сначала создай страну: /founding Название")
+            await answer_topic_safe(message, "Сначала создай страну: /founding Название")
             return
         remaining = cooldown_remaining(country, "base", config.BASE_COOLDOWN_SECONDS)
         if remaining:
-            await message.answer(cooldown_text("Следующая военная база доступна", remaining))
+            await answer_topic_safe(message, cooldown_text("Следующая военная база доступна", remaining))
             return
 
         tier = country.get("territory_tier", "medium")
         base_cap = config.TERRITORY_BASE_BONUS.get(tier, 0) + country["military"] // config.MILITARY_PER_BASE
         if country["military_bases"] >= base_cap:
-            await message.answer(
+            await answer_topic_safe(message,
                 f"Лимит военных баз исчерпан: {country['military_bases']}/{base_cap}.\n"
                 f"Увеличь армию (/mobilize) — лимит растёт вместе с ней."
             )
@@ -1087,7 +1090,7 @@ async def cmd_build_base(message: Message):
         next_count = country["military_bases"] + 1
         required_military = (next_count - 1) * config.MILITARY_PER_BASE
         if country["military"] < required_military:
-            await message.answer(
+            await answer_topic_safe(message,
                 f"Для базы №{next_count} сначала нужна армия не менее {required_military} внутренних единиц "
                 f"({required_military * config.MILITARY_UNIT_SIZE:,} военнослужащих)."
             )
@@ -1095,7 +1098,7 @@ async def cmd_build_base(message: Message):
         cost_gold = config.BASE_COST_GOLD * next_count
         cost_resources = config.BASE_COST_RESOURCES * next_count
         if country["gold"] < cost_gold or country["resources"] < cost_resources:
-            await message.answer(
+            await answer_topic_safe(message,
                 f"Недостаточно ресурсов для базы №{next_count}.\n"
                 f"Нужно: 💰{cost_gold}, 📦{cost_resources}.\n"
                 f"У тебя: 💰{country['gold']}, 📦{country['resources']}."
@@ -1104,11 +1107,11 @@ async def cmd_build_base(message: Message):
 
         applied = await db.apply_base(message.from_user.id, cost_gold, cost_resources, required_military)
         if not applied:
-            await message.answer("Ресурсы изменились во время строительства. Повтори команду.")
+            await answer_topic_safe(message, "Ресурсы изменились во время строительства. Повтори команду.")
             return
         await db.touch_cooldown(message.from_user.id, "base", int(time.time()))
 
-    await message.answer(f"🪖 Военная база построена! Теперь их {next_count}/{base_cap}.")
+    await answer_topic_safe(message, f"🪖 Военная база построена! Теперь их {next_count}/{base_cap}.")
 
 
 @dp.message(Command("spy"))
@@ -1116,7 +1119,7 @@ async def cmd_spy(message: Message):
     """/spy user_id — скрытная разведка чужой страны. Цель никогда не уведомляется."""
     parts = message.text.split()
     if len(parts) != 2 or not parts[1].isdigit():
-        await message.answer(
+        await answer_topic_safe(message,
             "Формат: <code>/spy user_id</code>\n"
             f"Стоимость: 💰{config.SPY_COST_GOLD}. Кулдаун: {config.SPY_COOLDOWN_SECONDS // 60} мин.\n"
             "Операция полностью скрытная — цель никогда не узнает, ни при успехе, ни при провале."
@@ -1126,34 +1129,34 @@ async def cmd_spy(message: Message):
     target_id = int(parts[1])
     spy_id = message.from_user.id
     if target_id == spy_id:
-        await message.answer("Шпионить за самим собой бессмысленно.")
+        await answer_topic_safe(message, "Шпионить за самим собой бессмысленно.")
         return
 
     async with get_user_lock(spy_id):
         spy_country = await db.get_country(spy_id)
         if not spy_country:
-            await message.answer("Сначала создай страну: /founding Название")
+            await answer_topic_safe(message, "Сначала создай страну: /founding Название")
             return
         target = await db.get_country(target_id)
         if not target:
-            await message.answer("У этого user_id нет страны.")
+            await answer_topic_safe(message, "У этого user_id нет страны.")
             return
 
         elapsed = int(time.time()) - spy_country.get("last_spy_at", 0)
         remaining = config.SPY_COOLDOWN_SECONDS - elapsed
         if remaining > 0:
             mins, secs = remaining // 60, remaining % 60
-            await message.answer(f"⏳ Следующую операцию можно провести через {mins} мин {secs} сек.")
+            await answer_topic_safe(message, f"⏳ Следующую операцию можно провести через {mins} мин {secs} сек.")
             return
         if spy_country["gold"] < config.SPY_COST_GOLD:
-            await message.answer(f"Недостаточно денег. Нужно 💰{config.SPY_COST_GOLD}.")
+            await answer_topic_safe(message, f"Недостаточно денег. Нужно 💰{config.SPY_COST_GOLD}.")
             return
 
         # Момент операции и стоимость фиксируем сразу — сама операция скрытная,
         # цель ни в коем случае не получает уведомления, независимо от исхода.
         applied = await db.apply_spy_operation(spy_id, config.SPY_COST_GOLD, int(time.time()))
         if not applied:
-            await message.answer("Деньги изменилось во время операции. Повтори попытку.")
+            await answer_topic_safe(message, "Деньги изменилось во время операции. Повтори попытку.")
             return
 
         # Шанс успеха растёт вместе с разницей tech/diplomacy шпиона и цели.
@@ -1162,10 +1165,10 @@ async def cmd_spy(message: Message):
         success = random.randint(1, 100) <= chance
 
     if not success:
-        await message.answer("🕵️ Операция провалилась — агент не смог добыть достоверные данные. Цель ничего не заметила.")
+        await answer_topic_safe(message, "🕵️ Операция провалилась — агент не смог добыть достоверные данные. Цель ничего не заметила.")
         return
 
-    await message.answer(
+    await answer_topic_safe(message,
         f"🕵️ Разведданные по «{esc(target['name'])}» (операция прошла незаметно):\n\n"
         f"💰 Экономика: {target['economy']}\n"
         f"⚔️ Армия: {target['military']}\n"
@@ -1181,7 +1184,7 @@ async def cmd_attack(message: Message):
     """/attack user_id описание атаки — война между двумя игроками, вердикт от ИИ"""
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3 or not parts[1].isdigit():
-        await message.answer(
+        await answer_topic_safe(message,
             "Формат: <code>/attack user_id описание атаки</code>\n"
             "user_id соперника можно узнать через /top (или он сам скажет через /myid).\n"
             "Пример: <code>/attack 123456789 Наношу внезапный удар по приграничным гарнизонам</code>"
@@ -1191,20 +1194,20 @@ async def cmd_attack(message: Message):
     defender_id = int(parts[1])
     action_text = parts[2].strip()
     if not action_text:
-        await message.answer("Опиши атаку после user_id соперника.")
+        await answer_topic_safe(message, "Опиши атаку после user_id соперника.")
         return
     if len(action_text) > config.MAX_ACTION_LEN:
-        await message.answer(f"Слишком длинное описание (макс {config.MAX_ACTION_LEN} символов).")
+        await answer_topic_safe(message, f"Слишком длинное описание (макс {config.MAX_ACTION_LEN} символов).")
         return
 
     attacker_id = message.from_user.id
     if defender_id == attacker_id:
-        await message.answer("Нельзя напасть на самого себя.")
+        await answer_topic_safe(message, "Нельзя напасть на самого себя.")
         return
 
     current_year = await db.get_current_year()
     if current_year is None:
-        await message.answer(
+        await answer_topic_safe(message,
             "⚠️ Год мира ещё не задан. Администратор должен сначала выполнить "
             "<code>/set_year год</code>, прежде чем атаки станут доступны."
         )
@@ -1221,11 +1224,11 @@ async def cmd_attack(message: Message):
         async with second_lock:
             attacker = await db.get_country(attacker_id)
             if not attacker:
-                await message.answer("Сначала создай страну: /founding Название")
+                await answer_topic_safe(message, "Сначала создай страну: /founding Название")
                 return
             defender = await db.get_country(defender_id)
             if not defender:
-                await message.answer("У этого user_id нет страны — атаковать некого.")
+                await answer_topic_safe(message, "У этого user_id нет страны — атаковать некого.")
                 return
 
             if config.ATTACK_COOLDOWN_SECONDS > 0:
@@ -1233,10 +1236,10 @@ async def cmd_attack(message: Message):
                 remaining = config.ATTACK_COOLDOWN_SECONDS - elapsed
                 if remaining > 0:
                     mins, secs = remaining // 60, remaining % 60
-                    await message.answer(f"⏳ Следующую атаку можно совершить через {mins} мин {secs} сек.")
+                    await answer_topic_safe(message, f"⏳ Следующую атаку можно совершить через {mins} мин {secs} сек.")
                     return
             if attacker_id in _war_inflight:
-                await message.answer("⏳ Твоя предыдущая атака ещё обрабатывается ведущим. Дождись результата.")
+                await answer_topic_safe(message, "⏳ Твоя предыдущая атака ещё обрабатывается ведущим. Дождись результата.")
                 return
             _war_inflight.add(attacker_id)
 
@@ -1334,7 +1337,7 @@ async def cmd_wars(message: Message):
     """/wars — последние военные столкновения между игроками"""
     wars = await db.get_recent_wars(10)
     if not wars:
-        await message.answer("Войн пока не было.")
+        await answer_topic_safe(message, "Войн пока не было.")
         return
     lines = ["⚔️ <b>Последние столкновения</b>\n"]
     for w in wars:
@@ -1344,27 +1347,27 @@ async def cmd_wars(message: Message):
             "draw": "сразилась вничью с",
         }.get(w["outcome"], "напал(а) на")
         lines.append(f"• <b>{esc(w['attacker_name'])}</b> {arrow} <b>{esc(w['defender_name'])}</b>")
-    await message.answer("\n".join(lines))
+    await answer_topic_safe(message, "\n".join(lines))
 
 
 @dp.message(Command("action"))
 async def cmd_action(message: Message):
     action_text = command_payload(message)
     if not action_text:
-        await message.answer(
+        await answer_topic_safe(message,
             "Опиши действие своей страны после команды.\n"
             "Пример: <code>/action Объявляю мобилизацию и готовлю вторжение в соседнее государство</code>"
         )
         return
     if len(action_text) > config.MAX_ACTION_LEN:
-        await message.answer(f"Слишком длинное описание (макс {config.MAX_ACTION_LEN} символов).")
+        await answer_topic_safe(message, f"Слишком длинное описание (макс {config.MAX_ACTION_LEN} символов).")
         return
 
     # Без заданного года мира ИИ не сможет корректно учитывать контекст эпохи в вердикте —
     # админ должен один раз задать год через /set_year, дальше он растёт сам.
     current_year = await db.get_current_year()
     if current_year is None:
-        await message.answer(
+        await answer_topic_safe(message,
             "⚠️ Год мира ещё не задан. Администратор должен сначала выполнить "
             "<code>/set_year год</code>, прежде чем действия станут доступны."
         )
@@ -1374,11 +1377,11 @@ async def cmd_action(message: Message):
     lock = get_user_lock(user_id)
     async with lock:
         if user_id in _ai_inflight:
-            await message.answer("⏳ Предыдущее действие ещё обрабатывается ведущим. Дождись результата.")
+            await answer_topic_safe(message, "⏳ Предыдущее действие ещё обрабатывается ведущим. Дождись результата.")
             return
         country = await db.get_country(message.from_user.id)
         if not country:
-            await message.answer("Сначала создай страну: /founding Название")
+            await answer_topic_safe(message, "Сначала создай страну: /founding Название")
             return
 
         if config.ACTION_COOLDOWN_SECONDS > 0:
@@ -1386,7 +1389,7 @@ async def cmd_action(message: Message):
             remaining = config.ACTION_COOLDOWN_SECONDS - elapsed
             if remaining > 0:
                 mins, secs = remaining // 60, remaining % 60
-                await message.answer(f"⏳ Следующее действие можно совершить через {mins} мин {secs} сек.")
+                await answer_topic_safe(message, f"⏳ Следующее действие можно совершить через {mins} мин {secs} сек.")
                 return
         _ai_inflight.add(user_id)
 
@@ -1444,29 +1447,29 @@ async def cmd_year(message: Message):
     """/year — показать текущий год мира"""
     year = await db.get_current_year()
     if year is None:
-        await message.answer(
+        await answer_topic_safe(message,
             "Год мира ещё не задан. Администратор должен выполнить <code>/set_year год</code>."
         )
         return
-    await message.answer(f"📅 Текущий год мира: <b>{year}</b>")
+    await answer_topic_safe(message, f"📅 Текущий год мира: <b>{year}</b>")
 
 
 @dp.message(Command("news"))
 async def cmd_news(message: Message):
     events = await db.get_recent_events_for_user(message.from_user.id, 8)
     if not events:
-        await message.answer("📰 <b>Мои новости</b>\n\nЛичных действий пока не было. Глобальная лента находится в разделе «🌎 Мир».", reply_markup=MORE_INLINE)
+        await answer_topic_safe(message, "📰 <b>Мои новости</b>\n\nЛичных действий пока не было. Глобальная лента находится в разделе «🌎 Мир».", reply_markup=MORE_INLINE)
         return
     lines = ["📰 <b>Мои новости</b>", "", "Здесь только решения и последствия твоей страны.", ""]
     for e in events:
         lines.append(f"• {esc(e['verdict_text'][:240])}")
     lines += ["", "Глобальные события: открой «🌎 Мир»." ]
-    await message.answer("\n\n".join(lines), reply_markup=MORE_INLINE)
+    await answer_topic_safe(message, "\n\n".join(lines), reply_markup=MORE_INLINE)
 
 
 @dp.message(Command("myid"))
 async def cmd_myid(message: Message):
-    await message.answer(f"Твой telegram user_id: <code>{message.from_user.id}</code>")
+    await answer_topic_safe(message, f"Твой telegram user_id: <code>{message.from_user.id}</code>")
 
 
 BEGINNER_GUIDE = (
@@ -1486,7 +1489,7 @@ BEGINNER_GUIDE = (
 
 @dp.message(Command("guide"))
 async def cmd_guide(message: Message):
-    await message.answer(BEGINNER_GUIDE, reply_markup=MAIN_INLINE)
+    await answer_topic_safe(message, BEGINNER_GUIDE, reply_markup=MAIN_INLINE)
 
 
 @dp.message(F.text.in_({"📊 Моя страна", "📊 Страна"}))
@@ -1700,12 +1703,12 @@ async def menu_back(message: Message):
 async def cmd_alliances(message: Message):
     items = await db.list_alliances()
     if not items:
-        await message.answer("Альянсов пока нет. Основать: /alliance_create ТЕГ Название")
+        await answer_topic_safe(message, "Альянсов пока нет. Основать: /alliance_create ТЕГ Название")
         return
     lines = ["🤝 <b>Альянсы</b>\n"]
     for a in items:
         lines.append(f"<b>{esc(a['tag'])}</b> — {esc(a['name'])} ({a['member_count']} стран)")
-    await message.answer("\n".join(lines))
+    await answer_topic_safe(message, "\n".join(lines))
 
 
 @dp.message(Command("alliance_create"))
@@ -1713,28 +1716,28 @@ async def cmd_alliance_create(message: Message):
     """/alliance_create ТЕГ Название альянса"""
     parts = message.text.split(maxsplit=2)
     if len(parts) != 3:
-        await message.answer("Формат: <code>/alliance_create ТЕГ Название альянса</code>\nПример: <code>/alliance_create BRICS БРИКС</code>")
+        await answer_topic_safe(message, "Формат: <code>/alliance_create ТЕГ Название альянса</code>\nПример: <code>/alliance_create BRICS БРИКС</code>")
         return
     tag, name = parts[1].strip(), " ".join(parts[2].split())
     if len(tag) > config.MAX_ALLIANCE_TAG_LEN or len(name) > config.MAX_ALLIANCE_NAME_LEN:
-        await message.answer(
+        await answer_topic_safe(message,
             f"Тег до {config.MAX_ALLIANCE_TAG_LEN} символов, название до {config.MAX_ALLIANCE_NAME_LEN}."
         )
         return
 
     country = await db.get_country(message.from_user.id)
     if not country:
-        await message.answer("Сначала создай страну: /founding Название")
+        await answer_topic_safe(message, "Сначала создай страну: /founding Название")
         return
 
     ok = await db.create_alliance(tag, name)
     if not ok:
-        await message.answer(f"Тег «{esc(tag)}» уже занят. Выбери другой.")
+        await answer_topic_safe(message, f"Тег «{esc(tag)}» уже занят. Выбери другой.")
         return
 
     alliance = await db.get_alliance_by_tag(tag)
     await db.join_alliance(message.from_user.id, alliance["id"])
-    await message.answer(f"🤝 Альянс <b>{esc(tag)}</b> — {esc(name)} создан, ты в нём первый участник.")
+    await answer_topic_safe(message, f"🤝 Альянс <b>{esc(tag)}</b> — {esc(name)} создан, ты в нём первый участник.")
 
 
 @dp.message(Command("alliance_join"))
@@ -1742,27 +1745,27 @@ async def cmd_alliance_join(message: Message):
     """/alliance_join ТЕГ"""
     parts = message.text.split()
     if len(parts) != 2:
-        await message.answer("Формат: <code>/alliance_join ТЕГ</code>\nСписок — /alliances")
+        await answer_topic_safe(message, "Формат: <code>/alliance_join ТЕГ</code>\nСписок — /alliances")
         return
     country = await db.get_country(message.from_user.id)
     if not country:
-        await message.answer("Сначала создай страну: /founding Название")
+        await answer_topic_safe(message, "Сначала создай страну: /founding Название")
         return
     alliance = await db.get_alliance_by_tag(parts[1])
     if not alliance:
-        await message.answer("Такого альянса нет. Список — /alliances")
+        await answer_topic_safe(message, "Такого альянса нет. Список — /alliances")
         return
     await db.join_alliance(message.from_user.id, alliance["id"])
-    await message.answer(f"✅ «{esc(country['name'])}» вступила в <b>{esc(alliance['tag'])}</b> — {esc(alliance['name'])}.")
+    await answer_topic_safe(message, f"✅ «{esc(country['name'])}» вступила в <b>{esc(alliance['tag'])}</b> — {esc(alliance['name'])}.")
 
 
 @dp.message(Command("alliance_leave"))
 async def cmd_alliance_leave(message: Message):
     ok = await db.leave_alliance(message.from_user.id)
     if ok:
-        await message.answer("Вышли из альянса.")
+        await answer_topic_safe(message, "Вышли из альянса.")
     else:
-        await message.answer("Ты не состоишь ни в одном альянсе.")
+        await answer_topic_safe(message, "Ты не состоишь ни в одном альянсе.")
 
 
 @dp.message(Command("alliance_info"))
@@ -1771,12 +1774,12 @@ async def cmd_alliance_info(message: Message):
     if len(parts) == 2:
         alliance = await db.get_alliance_by_tag(parts[1])
         if not alliance:
-            await message.answer("Такого альянса нет.")
+            await answer_topic_safe(message, "Такого альянса нет.")
             return
     else:
         alliance = await db.get_user_alliance(message.from_user.id)
         if not alliance:
-            await message.answer("Ты не в альянсе. Укажи тег: <code>/alliance_info ТЕГ</code>")
+            await answer_topic_safe(message, "Ты не в альянсе. Укажи тег: <code>/alliance_info ТЕГ</code>")
             return
 
     members = await db.get_alliance_members(alliance["id"])
@@ -1786,7 +1789,7 @@ async def cmd_alliance_info(message: Message):
     else:
         for m in members:
             lines.append(f"• {esc(m['name'])}")
-    await message.answer("\n".join(lines))
+    await answer_topic_safe(message, "\n".join(lines))
 
 
 TRADE_ALIASES = {
@@ -1815,33 +1818,33 @@ async def _trade_list_text(user_id: int) -> str:
 
 @dp.message(Command("trade"))
 async def cmd_trade(message: Message):
-    await message.answer(await _trade_list_text(message.from_user.id), reply_markup=MORE_INLINE)
+    await answer_topic_safe(message, await _trade_list_text(message.from_user.id), reply_markup=MORE_INLINE)
 
 
 @dp.message(Command("trade_offer"))
 async def cmd_trade_offer(message: Message):
     parts = message.text.split()
     if len(parts) != 5 or not parts[1].isdigit() or not parts[3].isdigit() or not parts[4].isdigit():
-        await message.answer("Формат: <code>/trade_offer user_id ресурс количество цена</code>\nПример: <code>/trade_offer 123456 wood 1000 500</code>")
+        await answer_topic_safe(message, "Формат: <code>/trade_offer user_id ресурс количество цена</code>\nПример: <code>/trade_offer 123456 wood 1000 500</code>")
         return
     target_id, amount, price = int(parts[1]), int(parts[3]), int(parts[4])
     resource = TRADE_ALIASES.get(parts[2].casefold())
     country = await db.get_country(message.from_user.id)
     target = await db.get_country(target_id)
     if not country or not target:
-        await message.answer("Обе страны должны быть зарегистрированы.")
+        await answer_topic_safe(message, "Обе страны должны быть зарегистрированы.")
         return
     if resource is None or amount <= 0 or price < 0:
-        await message.answer("Ресурс или количество указаны неверно. Доступны: resources, water, food, wood, iron, coal, oil, uranium.")
+        await answer_topic_safe(message, "Ресурс или количество указаны неверно. Доступны: resources, water, food, wood, iron, coal, oil, uranium.")
         return
     if country[resource] < amount:
-        await message.answer(f"Недостаточно {RESOURCE_NAMES_RU.get(resource, resource)} для предложения.")
+        await answer_topic_safe(message, f"Недостаточно {RESOURCE_NAMES_RU.get(resource, resource)} для предложения.")
         return
     contract_id = await db.create_trade_contract(message.from_user.id, target_id, resource, amount, price, int(time.time()) + 7 * 86400)
     if not contract_id:
-        await message.answer("Не удалось создать договор. Проверь данные и попробуй снова.")
+        await answer_topic_safe(message, "Не удалось создать договор. Проверь данные и попробуй снова.")
         return
-    await message.answer(f"📜 Предложение #{contract_id} создано для страны <b>{esc(target['name'])}</b>. Ресурсы списываются только после принятия.", reply_markup=MORE_INLINE)
+    await answer_topic_safe(message, f"📜 Предложение #{contract_id} создано для страны <b>{esc(target['name'])}</b>. Ресурсы списываются только после принятия.", reply_markup=MORE_INLINE)
     try:
         await bot.send_message(target["chat_id"], f"📜 Страна <b>{esc(country['name'])}</b> предлагает договор #{contract_id}: {RESOURCE_NAMES_RU.get(resource, resource)} {amount:,} за 💰{price:,}.\nПринять: <code>/trade_accept {contract_id}</code>")
     except Exception:
@@ -1852,20 +1855,20 @@ async def cmd_trade_offer(message: Message):
 async def cmd_trade_accept(message: Message):
     parts = message.text.split()
     if len(parts) != 2 or not parts[1].isdigit():
-        await message.answer("Формат: <code>/trade_accept номер_договора</code>")
+        await answer_topic_safe(message, "Формат: <code>/trade_accept номер_договора</code>")
         return
     ok = await db.accept_trade_contract(int(parts[1]), message.from_user.id)
-    await message.answer("✅ Договор принят: ресурсы и деньги переведены атомарно." if ok else "❌ Договор нельзя принять: он уже закрыт, истёк или одной из сторон не хватает средств.", reply_markup=MORE_INLINE)
+    await answer_topic_safe(message, "✅ Договор принят: ресурсы и деньги переведены атомарно." if ok else "❌ Договор нельзя принять: он уже закрыт, истёк или одной из сторон не хватает средств.", reply_markup=MORE_INLINE)
 
 
 @dp.message(Command("trade_reject"))
 async def cmd_trade_reject(message: Message):
     parts = message.text.split()
     if len(parts) != 2 or not parts[1].isdigit():
-        await message.answer("Формат: <code>/trade_reject номер_договора</code>")
+        await answer_topic_safe(message, "Формат: <code>/trade_reject номер_договора</code>")
         return
     ok = await db.reject_trade_contract(int(parts[1]), message.from_user.id)
-    await message.answer("Договор отклонён." if ok else "Договор не найден или уже закрыт.", reply_markup=MORE_INLINE)
+    await answer_topic_safe(message, "Договор отклонён." if ok else "Договор не найден или уже закрыт.", reply_markup=MORE_INLINE)
 
 
 async def render_world_events(message: Message, owner_id: int | None = None):
@@ -1893,16 +1896,16 @@ async def cmd_world(message: Message):
 @dp.message(Command("world_event"))
 async def cmd_world_event(message: Message):
     if not is_admin(message.from_user.id):
-        await message.answer("Команда только для админов.")
+        await answer_topic_safe(message, "Команда только для админов.")
         return
     payload = message.text.partition(" ")[2]
     parts = [part.strip() for part in payload.split("|", 2)]
     if len(parts) != 3 or not all(parts):
-        await message.answer("Формат: <code>/world_event тип | заголовок | описание</code>")
+        await answer_topic_safe(message, "Формат: <code>/world_event тип | заголовок | описание</code>")
         return
     year = await db.get_current_year()
     event_id = await db.create_world_event(parts[1], parts[2], parts[0], year)
-    await message.answer(f"🌎 Глобальное событие #{event_id} опубликовано.")
+    await answer_topic_safe(message, f"🌎 Глобальное событие #{event_id} опубликовано.")
 
 
 # --- Админ-команды ---
@@ -1911,15 +1914,15 @@ async def cmd_world_event(message: Message):
 async def cmd_set_year(message: Message):
     """/set_year год — задать (или переустановить) текущий год мира. Дальше растёт сам."""
     if not is_admin(message.from_user.id):
-        await message.answer("Команда только для админов.")
+        await answer_topic_safe(message, "Команда только для админов.")
         return
     parts = message.text.split()
     if len(parts) != 2 or not parts[1].lstrip("-").isdigit():
-        await message.answer("Формат: <code>/set_year год</code>\nПример: <code>/set_year 2140</code>")
+        await answer_topic_safe(message, "Формат: <code>/set_year год</code>\nПример: <code>/set_year 2140</code>")
         return
     year = int(parts[1])
     await db.set_world_year(year)
-    await message.answer(
+    await answer_topic_safe(message,
         f"📅 Год мира установлен: <b>{year}</b>.\n"
         f"Дальше он будет расти автоматически: 1 реальные сутки = 1 игровой год."
     )
@@ -1929,7 +1932,7 @@ async def cmd_set_year(message: Message):
 async def cmd_seed_alliances(message: Message):
     """/seed_alliances — создать канонические альянсы (НАТО, ОДКБ и т.д.), обычно сразу после вайпа."""
     if not is_admin(message.from_user.id):
-        await message.answer("Команда только для админов.")
+        await answer_topic_safe(message, "Команда только для админов.")
         return
     created, skipped = [], []
     for a in config.CANONICAL_ALLIANCES:
@@ -1940,30 +1943,30 @@ async def cmd_seed_alliances(message: Message):
         text += f"✅ Созданы: {', '.join(created)}\n"
     if skipped:
         text += f"⏭️ Уже существовали: {', '.join(skipped)}\n"
-    await message.answer(text or "Список канонических альянсов пуст.")
+    await answer_topic_safe(message, text or "Список канонических альянсов пуст.")
 
 
 @dp.message(Command("give_points"))
 async def cmd_give_points(message: Message):
     """/give_points количество — всем; /give_points user_id количество — одному"""
     if not is_admin(message.from_user.id):
-        await message.answer("Команда только для админов.")
+        await answer_topic_safe(message, "Команда только для админов.")
         return
     parts = message.text.split()
     if len(parts) == 2 and parts[1].isdigit():
         amount = int(parts[1])
         await db.set_points_all(amount)
-        await message.answer(f"Всем странам начислено по {amount} очков развития.")
+        await answer_topic_safe(message, f"Всем странам начислено по {amount} очков развития.")
     elif len(parts) == 3 and parts[1].isdigit() and parts[2].lstrip("-").isdigit():
         user_id, amount = int(parts[1]), int(parts[2])
         target_country = await db.get_country(user_id)
         if not target_country:
-            await message.answer("У этого user_id нет страны.")
+            await answer_topic_safe(message, "У этого user_id нет страны.")
             return
         await db.update_stat(user_id, "points", amount)
-        await message.answer(f"Игроку {user_id} начислено {amount} очков.")
+        await answer_topic_safe(message, f"Игроку {user_id} начислено {amount} очков.")
     else:
-        await message.answer(
+        await answer_topic_safe(message,
             "Формат:\n<code>/give_points количество</code> — всем\n"
             "<code>/give_points user_id количество</code> — одному игроку"
         )
@@ -1973,67 +1976,67 @@ async def cmd_give_points(message: Message):
 async def cmd_set_stat(message: Message):
     """/set_stat user_id характеристика значение — ручная правка"""
     if not is_admin(message.from_user.id):
-        await message.answer("Команда только для админов.")
+        await answer_topic_safe(message, "Команда только для админов.")
         return
     parts = message.text.split()
     if len(parts) != 4 or not parts[1].isdigit() or parts[2] not in STAT_NAMES_RU:
-        await message.answer("Формат: <code>/set_stat user_id характеристика новое_значение</code>")
+        await answer_topic_safe(message, "Формат: <code>/set_stat user_id характеристика новое_значение</code>")
         return
     user_id, stat, value = int(parts[1]), parts[2], parts[3]
     if not value.lstrip("-").isdigit():
-        await message.answer("Значение должно быть числом.")
+        await answer_topic_safe(message, "Значение должно быть числом.")
         return
     country = await db.get_country(user_id)
     if not country:
-        await message.answer("Такой страны нет.")
+        await answer_topic_safe(message, "Такой страны нет.")
         return
     delta = int(value) - country[stat]
     await db.update_stat(user_id, stat, delta)
-    await message.answer(f"Готово. {STAT_NAMES_RU[stat]} игрока {user_id} теперь {value}.")
+    await answer_topic_safe(message, f"Готово. {STAT_NAMES_RU[stat]} игрока {user_id} теперь {value}.")
 
 
 @dp.message(Command("kick"))
 async def cmd_kick(message: Message):
     """/kick user_id — убрать игрока со страны"""
     if not is_admin(message.from_user.id):
-        await message.answer("Команда только для админов.")
+        await answer_topic_safe(message, "Команда только для админов.")
         return
     parts = message.text.split()
     if len(parts) != 2 or not parts[1].isdigit():
-        await message.answer("Формат: <code>/kick user_id</code>")
+        await answer_topic_safe(message, "Формат: <code>/kick user_id</code>")
         return
     user_id = int(parts[1])
     country = await db.get_country(user_id)
     if not country:
-        await message.answer("У этого игрока нет страны.")
+        await answer_topic_safe(message, "У этого игрока нет страны.")
         return
     ok = await db.delete_country(user_id)
     if ok:
-        await message.answer(f"❌ Игрок {user_id} снят со страны «{esc(country['name'])}». Страна удалена.")
+        await answer_topic_safe(message, f"❌ Игрок {user_id} снят со страны «{esc(country['name'])}». Страна удалена.")
     else:
-        await message.answer("Не получилось удалить — попробуй ещё раз.")
+        await answer_topic_safe(message, "Не получилось удалить — попробуй ещё раз.")
 
 
 @dp.message(Command("transfer"))
 async def cmd_transfer(message: Message):
     """/transfer старый_id новый_id — передать страну другому игроку"""
     if not is_admin(message.from_user.id):
-        await message.answer("Команда только для админов.")
+        await answer_topic_safe(message, "Команда только для админов.")
         return
     parts = message.text.split()
     if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
-        await message.answer("Формат: <code>/transfer старый_user_id новый_user_id</code>")
+        await answer_topic_safe(message, "Формат: <code>/transfer старый_user_id новый_user_id</code>")
         return
     old_id, new_id = int(parts[1]), int(parts[2])
     old_country = await db.get_country(old_id)
     if not old_country:
-        await message.answer("У старого user_id нет страны.")
+        await answer_topic_safe(message, "У старого user_id нет страны.")
         return
     ok = await db.transfer_country(old_id, new_id)
     if ok:
-        await message.answer(f"✅ Страна «{esc(old_country['name'])}» передана от {old_id} к {new_id}.")
+        await answer_topic_safe(message, f"✅ Страна «{esc(old_country['name'])}» передана от {old_id} к {new_id}.")
     else:
-        await message.answer("Не удалось передать: либо у нового user_id уже есть страна, либо старая не найдена.")
+        await answer_topic_safe(message, "Не удалось передать: либо у нового user_id уже есть страна, либо старая не найдена.")
 
 
 @dp.message(Command("help"))

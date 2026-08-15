@@ -518,6 +518,13 @@ async def delete_country(user_id: int) -> bool:
         await db.execute("DELETE FROM wars WHERE attacker_id = ? OR defender_id = ?", (user_id, user_id))
         await db.execute("DELETE FROM buildings WHERE user_id = ?", (user_id,))
         await db.execute("DELETE FROM alliance_members WHERE user_id = ?", (user_id,))
+        # A deleted player must not leave pending offers that can later be
+        # accepted against a non-existent proposer or target.
+        await db.execute(
+            "UPDATE trade_contracts SET status = 'cancelled', resolved_at = ? "
+            "WHERE status = 'pending' AND (proposer_id = ? OR target_id = ?)",
+            (int(time.time()), user_id, user_id),
+        )
         cur = await db.execute("DELETE FROM countries WHERE user_id = ?", (user_id,))
         await db.commit()
         return cur.rowcount > 0
@@ -554,12 +561,27 @@ async def transfer_country(old_user_id: int, new_user_id: int, new_chat_id: int 
         await db.execute(
             "UPDATE wars SET defender_id = ? WHERE defender_id = ?", (new_user_id, old_user_id)
         )
-        try:
+        await db.execute(
+            "UPDATE trade_contracts SET proposer_id = ? WHERE proposer_id = ?",
+            (new_user_id, old_user_id),
+        )
+        await db.execute(
+            "UPDATE trade_contracts SET target_id = ? WHERE target_id = ?",
+            (new_user_id, old_user_id),
+        )
+        # Preserve the one-alliance-per-player invariant. If the recipient is
+        # already in an alliance, discard the old membership rather than leave
+        # an orphan row or silently retain the old Telegram user id.
+        cur = await db.execute(
+            "SELECT 1 FROM alliance_members WHERE user_id = ?", (new_user_id,)
+        )
+        if await cur.fetchone():
+            await db.execute("DELETE FROM alliance_members WHERE user_id = ?", (old_user_id,))
+        else:
             await db.execute(
-                "UPDATE alliance_members SET user_id = ? WHERE user_id = ?", (new_user_id, old_user_id)
+                "UPDATE alliance_members SET user_id = ? WHERE user_id = ?",
+                (new_user_id, old_user_id),
             )
-        except aiosqlite.IntegrityError:
-            pass  # у нового user_id уже есть запись в alliance_members — не перезаписываем
         await db.commit()
         return True
 
@@ -811,7 +833,7 @@ async def get_current_year():
     row = await get_world_year_row()
     if row is None:
         return None
-    elapsed_years = (int(time.time()) - row["started_at"]) // SECONDS_PER_GAME_YEAR
+    elapsed_years = (int(time.time()) - row["started_at"]) // max(1, int(SECONDS_PER_GAME_YEAR))
     return row["base_year"] + elapsed_years
 
 
