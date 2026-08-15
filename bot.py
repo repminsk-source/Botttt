@@ -102,14 +102,24 @@ def is_admin(user_id: int) -> bool:
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="📊 Моя страна"), KeyboardButton(text="📖 Что делать?")],
-        [KeyboardButton(text="📥 Собрать ресурсы"), KeyboardButton(text="🏗️ Построить")],
-        [KeyboardButton(text="⚔️ Армия"), KeyboardButton(text="📈 Прогресс")],
-        [KeyboardButton(text="🏛️ Политика"), KeyboardButton(text="🤝 Дипломатия")],
-        [KeyboardButton(text="📰 Новости"), KeyboardButton(text="🌍 Рейтинг")],
+        [KeyboardButton(text="📊 Страна"), KeyboardButton(text="📥 Сбор")],
+        [KeyboardButton(text="🏗️ Строить"), KeyboardButton(text="⚔️ Армия")],
+        [KeyboardButton(text="📈 Прогресс"), KeyboardButton(text="☰ Ещё")],
     ],
     resize_keyboard=True,
-    input_field_placeholder="Выбери действие или введи команду",
+    is_persistent=True,
+    input_field_placeholder="Выберите раздел",
+)
+
+MORE_KEYBOARD = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📰 Новости"), KeyboardButton(text="🌍 Рейтинг")],
+        [KeyboardButton(text="🏛️ Политика"), KeyboardButton(text="🤝 Дипломатия")],
+        [KeyboardButton(text="📖 Помощь"), KeyboardButton(text="⬅️ Назад")],
+    ],
+    resize_keyboard=True,
+    is_persistent=True,
+    input_field_placeholder="Выберите раздел",
 )
 
 
@@ -1321,17 +1331,17 @@ async def cmd_guide(message: Message):
     await message.answer(BEGINNER_GUIDE, reply_markup=MAIN_KEYBOARD)
 
 
-@dp.message(F.text == "📊 Моя страна")
+@dp.message(F.text.in_({"📊 Моя страна", "📊 Страна"}))
 async def menu_country(message: Message):
     await cmd_country(message)
 
 
-@dp.message(F.text == "📖 Что делать?")
+@dp.message(F.text.in_({"📖 Что делать?", "📖 Помощь"}))
 async def menu_guide(message: Message):
     await cmd_guide(message)
 
 
-@dp.message(F.text == "📥 Собрать ресурсы")
+@dp.message(F.text.in_({"📥 Собрать ресурсы", "📥 Сбор"}))
 async def menu_collect(message: Message):
     await cmd_collect(message)
 
@@ -1346,7 +1356,7 @@ async def menu_top(message: Message):
     await cmd_top(message)
 
 
-@dp.message(F.text == "🏗️ Построить")
+@dp.message(F.text.in_({"🏗️ Построить", "🏗️ Строить"}))
 async def menu_build(message: Message):
     await message.answer(
         "<b>🏗️ Что строить сначала</b>\n\n"
@@ -1396,6 +1406,18 @@ async def menu_army(message: Message):
         "Команда: <code>/mobilize 1</code>"
     )
 
+
+@dp.message(F.text == "☰ Ещё")
+async def menu_more(message: Message):
+    await answer_topic_safe(
+        message,
+        "<b>Ещё разделы</b>\nНовости, рейтинг, политика, дипломатия и помощь.",
+        reply_markup=MORE_KEYBOARD,
+    )
+
+@dp.message(F.text == "⬅️ Назад")
+async def menu_back(message: Message):
+    await answer_topic_safe(message, "Главное меню", reply_markup=MAIN_KEYBOARD)
 
 # --- Альянсы ---
 
