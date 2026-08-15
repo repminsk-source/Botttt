@@ -27,6 +27,7 @@ import countries
 import territory
 import market
 import world_data
+from anti_spam import AntiSpamMiddleware
 
 # Объединённый список построек: старые (BUILDINGS) + новые сырьевые (RESOURCE_BUILDINGS).
 # Собран в один словарь, чтобы /build, /collect и format_country работали с обоими
@@ -38,6 +39,9 @@ logger = logging.getLogger("gavan")
 
 bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
+spam_guard = AntiSpamMiddleware()
+dp.message.middleware(spam_guard)
+dp.callback_query.middleware(spam_guard)
 
 
 def esc(text) -> str:

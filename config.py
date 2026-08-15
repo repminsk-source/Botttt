@@ -111,6 +111,13 @@ MAX_MOBILIZE_PER_ACTION = 50
 # Максимум символов в описании действия от игрока
 MAX_ACTION_LEN = 1500
 
+# Глобальная защита от спама интерфейса. Она не заменяет игровые таймеры:
+# повтор одного сообщения режется отдельно от честных игровых действий.
+GLOBAL_MESSAGE_COOLDOWN_SECONDS = float(os.getenv("GLOBAL_MESSAGE_COOLDOWN_SECONDS", "1.5"))
+DUPLICATE_MESSAGE_WINDOW_SECONDS = float(os.getenv("DUPLICATE_MESSAGE_WINDOW_SECONDS", "4"))
+SPAM_BURST_WINDOW_SECONDS = float(os.getenv("SPAM_BURST_WINDOW_SECONDS", "10"))
+SPAM_BURST_LIMIT = int(os.getenv("SPAM_BURST_LIMIT", "8"))
+
 # Кулдаун между /action у одного игрока, в секундах (0 = выключен)
 ACTION_COOLDOWN_SECONDS = int(os.getenv("ACTION_COOLDOWN_SECONDS", str(10 * 60)))
 ATTACK_COOLDOWN_SECONDS = int(os.getenv("ATTACK_COOLDOWN_SECONDS", str(60 * 60)))
