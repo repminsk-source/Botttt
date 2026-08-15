@@ -1011,7 +1011,7 @@ async def cmd_market(message: Message):
         lines.append(f"{RESOURCE_NAMES_RU[resource]}: 💰{price}/ед. {arrow}")
     lines.append(f"\n⏳ Цены обновятся через ~{mins} мин.")
     lines.append("Купить: <code>/buy ресурс количество</code>")
-    await answer_topic_safe(message, "\n".join(lines))
+    await answer_topic_safe(message, "\n".join(lines), reply_markup=ECONOMY_INLINE)
 
 
 @dp.message(Command("buy"))
@@ -1608,7 +1608,9 @@ async def callback_economy_collect(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "eco:market")
 async def callback_economy_market(callback: CallbackQuery):
-    await finish_callback(callback, "/market", cmd_market, ECONOMY_INLINE)
+    # cmd_market renders the final card itself; do not append a second menu
+    # afterward, because active-message cleanup would immediately remove it.
+    await finish_callback(callback, "/market", cmd_market, None)
 
 
 @dp.callback_query(F.data == "army:mobilize:1")
