@@ -6,7 +6,7 @@ import random
 import time
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     ErrorEvent,
@@ -40,6 +40,11 @@ logger = logging.getLogger("gavan")
 bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 spam_guard = AntiSpamMiddleware()
+
+# One active interface card per player and forum topic. The player is part of
+# the key because a group can contain many independent game sessions.
+_ACTIVE_INTERFACE_MESSAGES: dict[tuple[int, int, int], int] = {}
+
 dp.message.middleware(spam_guard)
 dp.callback_query.middleware(spam_guard)
 
@@ -61,18 +66,43 @@ def command_payload(message: Message) -> str:
     return parts[1].strip() if len(parts) == 2 else ""
 
 
-async def answer_topic_safe(message: Message, text: str, reply_markup=None):
-    """Send a reply; if the source forum topic is closed, send to the chat's general topic."""
+def _interface_key(message: Message, owner_id: int | None = None) -> tuple[int, int, int]:
+    """Return the storage key for one player's active card in one chat/topic."""
+    return (
+        message.chat.id,
+        int(owner_id if owner_id is not None else message.from_user.id),
+        int(message.message_thread_id or 0),
+    )
+
+
+async def answer_topic_safe(
+    message: Message,
+    text: str,
+    reply_markup=None,
+    owner_id: int | None = None,
+):
+    """Send a new active card and remove this player's previous one when possible."""
     try:
-        return await message.answer(text, reply_markup=reply_markup)
+        sent = await message.answer(text, reply_markup=reply_markup)
     except TelegramBadRequest as exc:
         if "TOPIC_CLOSED" not in str(exc):
             raise
-        return await bot.send_message(
+        sent = await bot.send_message(
             chat_id=message.chat.id,
             text="⚠️ Эта тема закрыта. Ответ отправлен в общую тему группы. Открой тему или продолжи там.\n\n" + text,
             reply_markup=reply_markup,
         )
+    key = _interface_key(message, owner_id)
+    previous_id = _ACTIVE_INTERFACE_MESSAGES.get(key)
+    _ACTIVE_INTERFACE_MESSAGES[key] = sent.message_id
+    if previous_id is not None and previous_id != sent.message_id:
+        try:
+            await bot.delete_message(chat_id=message.chat.id, message_id=previous_id)
+        except (TelegramBadRequest, TelegramForbiddenError) as exc:
+            # Deletion is deliberately best-effort. Lack of admin rights must
+            # never turn a successful game action into an error.
+            logger.debug("Could not delete previous interface message %s: %s", previous_id, exc)
+    return sent
 
 
 STAT_NAMES_RU = {
@@ -195,7 +225,12 @@ async def finish_callback(callback: CallbackQuery, command: str, handler, markup
     await callback.answer()
     await handler(callback_message(callback, command))
     if markup is not None:
-        await callback.message.answer("Меню разделов:", reply_markup=markup)
+        await answer_topic_safe(
+            callback.message,
+            "Меню разделов:",
+            reply_markup=markup,
+            owner_id=callback.from_user.id,
+        )
 
 
 def progression_snapshot(country: dict, buildings: dict | None = None) -> dict:
@@ -555,7 +590,7 @@ async def cmd_policy(message: Message):
     """Показать или сменить национальную доктрину."""
     country = await db.get_country(message.from_user.id)
     if not country:
-        await message.answer("Сначала основи страну: <code>/founding Бразилия</code>")
+        await answer_topic_safe(message, "Сначала основи страну: <code>/founding Бразилия</code>")
         return
     parts = message.text.split()
     if len(parts) == 1:
@@ -622,7 +657,7 @@ async def cmd_country(message: Message):
 async def cmd_progress(message: Message):
     country = await db.get_country(message.from_user.id)
     if not country:
-        await message.answer("Сначала основи страну: <code>/founding Бразилия</code>")
+        await answer_topic_safe(message, "Сначала основи страну: <code>/founding Бразилия</code>")
         return
     buildings = await db.get_buildings(message.from_user.id)
     progress = progression_snapshot(country, buildings)
@@ -1481,7 +1516,8 @@ async def menu_top(message: Message):
 
 @dp.message(F.text.in_({"🏗️ Построить", "🏗️ Строить"}))
 async def menu_build(message: Message):
-    await message.answer(
+    await answer_topic_safe(
+        message,
         "<b>🏗️ Развитие инфраструктуры</b>\n\n"
         "Выбери один объект. После строительства сбор ресурсов покажет новый эффект.",
         reply_markup=BUILD_INLINE,
@@ -1504,13 +1540,14 @@ async def menu_news(message: Message):
 async def menu_army(message: Message):
     country = await db.get_country(message.from_user.id)
     if not country:
-        await message.answer("Сначала основи страну: <code>/founding Бразилия</code>")
+        await answer_topic_safe(message, "Сначала основи страну: <code>/founding Бразилия</code>")
         return
     base_capacity = country["military_bases"] * config.MILITARY_PER_BASE
     factual_capacity = int(country["real_population"] * config.MAX_ARMY_POPULATION_SHARE / config.MILITARY_UNIT_SIZE) if country.get("real_population") else None
     demographic_text = f"\nДемографический предел: {factual_capacity:,}" if factual_capacity is not None else ""
     free_capacity = max(0, base_capacity - country['military'])
-    await message.answer(
+    await answer_topic_safe(
+        message,
         f"⚔️ <b>Армия {esc(country['name'])}</b>\n\n"
         f"Сила: <b>{country['military']:,}/{base_capacity:,}</b> · свободно <b>{free_capacity:,}</b>\n"
         f"Базы: <b>{country['military_bases']}</b> · резерв: <b>{country['manpower']:,}</b>\n"
@@ -1532,13 +1569,13 @@ async def menu_more(message: Message):
 @dp.callback_query(F.data == "ui:more")
 async def callback_more(callback: CallbackQuery):
     await callback.answer()
-    await callback.message.answer("<b>Ещё разделы</b>", reply_markup=MORE_INLINE)
+    await answer_topic_safe(callback.message, "<b>Ещё разделы</b>", reply_markup=MORE_INLINE, owner_id=callback.from_user.id)
 
 
 @dp.callback_query(F.data == "ui:back")
 async def callback_back(callback: CallbackQuery):
     await callback.answer()
-    await callback.message.answer("<b>Главное меню</b>", reply_markup=MAIN_INLINE)
+    await answer_topic_safe(callback.message, "<b>Главное меню</b>", reply_markup=MAIN_INLINE, owner_id=callback.from_user.id)
 
 
 @dp.callback_query(F.data == "ui:country")
@@ -1546,9 +1583,9 @@ async def callback_country(callback: CallbackQuery):
     await callback.answer()
     country = await db.get_country(callback.from_user.id)
     if not country:
-        await callback.message.answer("Сначала основи страну: <code>/founding Бразилия</code>", reply_markup=MAIN_INLINE)
+        await answer_topic_safe(callback.message, "Сначала основи страну: <code>/founding Бразилия</code>", reply_markup=MAIN_INLINE, owner_id=callback.from_user.id)
         return
-    await callback.message.answer(await format_country_summary(country), reply_markup=COUNTRY_INLINE)
+    await answer_topic_safe(callback.message, await format_country_summary(country), reply_markup=COUNTRY_INLINE, owner_id=callback.from_user.id)
 
 
 @dp.callback_query(F.data == "ui:economy")
@@ -1556,9 +1593,9 @@ async def callback_economy(callback: CallbackQuery):
     await callback.answer()
     country = await db.get_country(callback.from_user.id)
     if not country:
-        await callback.message.answer("Сначала основи страну: <code>/founding Бразилия</code>", reply_markup=MAIN_INLINE)
+        await answer_topic_safe(callback.message, "Сначала основи страну: <code>/founding Бразилия</code>", reply_markup=MAIN_INLINE, owner_id=callback.from_user.id)
         return
-    await callback.message.answer(await format_country_economy(country), reply_markup=ECONOMY_INLINE)
+    await answer_topic_safe(callback.message, await format_country_economy(country), reply_markup=ECONOMY_INLINE, owner_id=callback.from_user.id)
 
 
 @dp.callback_query(F.data == "eco:collect")
@@ -1601,9 +1638,9 @@ async def callback_build_type(callback: CallbackQuery):
     elif building in ALL_BUILDINGS:
         await cmd_build(callback_message(callback, f"/build {building}"))
     else:
-        await callback.message.answer("Неизвестный тип постройки. Открой строительство заново.")
+        await answer_topic_safe(callback.message, "Неизвестный тип постройки. Открой строительство заново.", owner_id=callback.from_user.id)
         return
-    await callback.message.answer("Меню разделов:", reply_markup=MAIN_INLINE)
+    await answer_topic_safe(callback.message, "Меню разделов:", reply_markup=MAIN_INLINE, owner_id=callback.from_user.id)
 
 
 @dp.callback_query(F.data == "ui:army")
@@ -1629,13 +1666,13 @@ async def callback_top(callback: CallbackQuery):
 @dp.callback_query(F.data == "ui:world")
 async def callback_world(callback: CallbackQuery):
     await callback.answer()
-    await render_world_events(callback.message)
+    await render_world_events(callback.message, owner_id=callback.from_user.id)
 
 
 @dp.callback_query(F.data == "ui:trade")
 async def callback_trade(callback: CallbackQuery):
     await callback.answer()
-    await callback.message.answer(await _trade_list_text(callback.from_user.id), reply_markup=MORE_INLINE)
+    await answer_topic_safe(callback.message, await _trade_list_text(callback.from_user.id), reply_markup=MORE_INLINE, owner_id=callback.from_user.id)
 
 
 @dp.callback_query(F.data == "ui:policy")
@@ -1831,16 +1868,21 @@ async def cmd_trade_reject(message: Message):
     await message.answer("Договор отклонён." if ok else "Договор не найден или уже закрыт.", reply_markup=MORE_INLINE)
 
 
-async def render_world_events(message: Message):
+async def render_world_events(message: Message, owner_id: int | None = None):
     events = await db.get_world_events(8)
     if not events:
-        await message.answer("🌎 <b>Мировая лента</b>\n\nАктивных глобальных событий пока нет.", reply_markup=MORE_INLINE)
+        await answer_topic_safe(
+            message,
+            "🌎 <b>Мировая лента</b>\n\nАктивных глобальных событий пока нет.",
+            reply_markup=MORE_INLINE,
+            owner_id=owner_id,
+        )
         return
     lines = ["🌎 <b>Мировая лента</b>", ""]
     for event in events:
         year = f" · {event['game_year']} год" if event.get("game_year") else ""
         lines.append(f"<b>{esc(event['title'])}</b>{year}\n{esc(event['description'])}")
-    await message.answer("\n\n".join(lines), reply_markup=MORE_INLINE)
+    await answer_topic_safe(message, "\n\n".join(lines), reply_markup=MORE_INLINE, owner_id=owner_id)
 
 
 @dp.message(Command("world"))
