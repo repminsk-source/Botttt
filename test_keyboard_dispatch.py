@@ -11,6 +11,8 @@ EXPECTED = {
     "ui:collect": "callback_collect",
     "eco:collect": "callback_economy_collect",
     "eco:market": "callback_economy_market",
+    "ui:world": "callback_world",
+    "ui:trade": "callback_trade",
     "army:mobilize:1": "callback_army_mobilize",
     "army:base": "callback_army_base",
     "ui:build": "callback_build",

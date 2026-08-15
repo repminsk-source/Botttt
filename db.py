@@ -1,6 +1,7 @@
 import aiosqlite
 import logging
 import time
+import json
 from contextlib import asynccontextmanager
 logger = logging.getLogger("gavan.db")
 
@@ -94,6 +95,35 @@ CREATE TABLE IF NOT EXISTS events (
     verdict_text TEXT,
     created_at INTEGER NOT NULL
 );
+
+-- Глобальные события отделены от локальных действий игроков.
+CREATE TABLE IF NOT EXISTS world_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    event_type TEXT NOT NULL DEFAULT 'world',
+    game_year INTEGER,
+    effects_json TEXT NOT NULL DEFAULT '{}',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS trade_contracts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    proposer_id INTEGER NOT NULL,
+    target_id INTEGER NOT NULL,
+    resource TEXT NOT NULL,
+    amount INTEGER NOT NULL CHECK(amount > 0),
+    price INTEGER NOT NULL CHECK(price >= 0),
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    resolved_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_world_events_active ON world_events(active, created_at);
+CREATE INDEX IF NOT EXISTS idx_trade_contracts_target ON trade_contracts(target_id, status);
+CREATE INDEX IF NOT EXISTS idx_trade_contracts_proposer ON trade_contracts(proposer_id, status);
 
 CREATE TABLE IF NOT EXISTS buildings (
     user_id INTEGER NOT NULL,
@@ -219,6 +249,12 @@ async def init_db():
                 # иначе Render продолжит работу с неполной схемой.
                 if "duplicate column name" not in str(exc).lower():
                     raise
+        cur = await db.execute("SELECT COUNT(*) FROM world_events")
+        if (await cur.fetchone())[0] == 0:
+            await db.execute(
+                "INSERT INTO world_events (title, description, event_type, game_year, effects_json, active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
+                ("Новая эпоха", "Мировая система готова к первым решениям государств. Торговля, союзы и конфликты будут менять баланс сил.", "global", None, "{}", int(time.time())),
+            )
         await db.commit()
 
 
@@ -351,6 +387,123 @@ async def get_recent_events(limit: int = 10):
         cur = await db.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,))
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+
+async def get_recent_events_for_user(user_id: int, limit: int = 10):
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM events WHERE user_id = ? ORDER BY id DESC LIMIT ?", (user_id, limit))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def create_world_event(title: str, description: str, event_type: str = "world", game_year: int | None = None, effects: dict | None = None, expires_at: int | None = None) -> int:
+    if not title.strip() or not description.strip():
+        raise ValueError("Событие должно иметь заголовок и описание")
+    async with _connect() as db:
+        cur = await db.execute(
+            "INSERT INTO world_events (title, description, event_type, game_year, effects_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (title.strip()[:160], description.strip()[:2000], event_type.strip()[:32] or "world", game_year, json.dumps(effects or {}, ensure_ascii=False), int(time.time()), expires_at),
+        )
+        await db.commit()
+        return int(cur.lastrowid)
+
+
+async def get_world_events(limit: int = 10, active_only: bool = True):
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        where = "WHERE active = 1 AND (expires_at IS NULL OR expires_at > ?)" if active_only else ""
+        args = (int(time.time()), limit) if active_only else (limit,)
+        cur = await db.execute(f"SELECT * FROM world_events {where} ORDER BY id DESC LIMIT ?", args)
+        rows = await cur.fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["effects"] = json.loads(item.pop("effects_json") or "{}")
+            except json.JSONDecodeError:
+                item["effects"] = {}
+            result.append(item)
+        return result
+
+
+async def deactivate_world_event(event_id: int) -> bool:
+    async with _connect() as db:
+        cur = await db.execute("UPDATE world_events SET active = 0 WHERE id = ? AND active = 1", (event_id,))
+        await db.commit()
+        return cur.rowcount == 1
+
+
+TRADE_RESOURCES = frozenset({"resources", "water", "food", "wood", "iron", "coal", "oil", "uranium"})
+
+
+async def create_trade_contract(proposer_id: int, target_id: int, resource: str, amount: int, price: int, expires_at: int | None = None):
+    if proposer_id == target_id or resource not in TRADE_RESOURCES or amount <= 0 or price < 0:
+        return None
+    async with _connect() as db:
+        cur = await db.execute("SELECT 1 FROM countries WHERE user_id IN (?, ?)", (proposer_id, target_id))
+        if len(await cur.fetchall()) != 2:
+            return None
+        cur = await db.execute(
+            "INSERT INTO trade_contracts (proposer_id, target_id, resource, amount, price, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (proposer_id, target_id, resource, amount, price, int(time.time()), expires_at),
+        )
+        await db.commit()
+        return int(cur.lastrowid)
+
+
+async def get_trade_contract(contract_id: int):
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM trade_contracts WHERE id = ?", (contract_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def list_trade_contracts(user_id: int, limit: int = 20):
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT t.*, p.name AS proposer_name, q.name AS target_name
+               FROM trade_contracts t
+               LEFT JOIN countries p ON p.user_id = t.proposer_id
+               LEFT JOIN countries q ON q.user_id = t.target_id
+               WHERE (t.proposer_id = ? OR t.target_id = ?) AND t.status = 'pending'
+               ORDER BY t.id DESC LIMIT ?""",
+            (user_id, user_id, limit),
+        )
+        return [dict(row) for row in await cur.fetchall()]
+
+
+async def accept_trade_contract(contract_id: int, target_id: int, timestamp: int | None = None) -> bool:
+    timestamp = int(timestamp or time.time())
+    async with _connect() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM trade_contracts WHERE id = ? AND target_id = ? AND status = 'pending'", (contract_id, target_id))
+        contract = await cur.fetchone()
+        if not contract or (contract["expires_at"] is not None and contract["expires_at"] <= timestamp):
+            await db.rollback()
+            return False
+        cur = await db.execute("SELECT * FROM countries WHERE user_id IN (?, ?)", (contract["proposer_id"], contract["target_id"]))
+        countries = {row["user_id"]: row for row in await cur.fetchall()}
+        proposer, target = countries.get(contract["proposer_id"]), countries.get(contract["target_id"])
+        if not proposer or not target or proposer[contract["resource"]] < contract["amount"] or target["gold"] < contract["price"]:
+            await db.rollback()
+            return False
+        resource = contract["resource"]
+        await db.execute(f"UPDATE countries SET {resource} = {resource} - ? WHERE user_id = ?", (contract["amount"], contract["proposer_id"]))
+        await db.execute(f"UPDATE countries SET {resource} = {resource} + ?, gold = gold - ? WHERE user_id = ?", (contract["amount"], contract["price"], contract["target_id"]))
+        await db.execute("UPDATE countries SET gold = gold + ? WHERE user_id = ?", (contract["price"], contract["proposer_id"]))
+        await db.execute("UPDATE trade_contracts SET status = 'accepted', resolved_at = ? WHERE id = ?", (timestamp, contract_id))
+        await db.commit()
+        return True
+
+
+async def reject_trade_contract(contract_id: int, target_id: int) -> bool:
+    async with _connect() as db:
+        cur = await db.execute("UPDATE trade_contracts SET status = 'rejected', resolved_at = ? WHERE id = ? AND target_id = ? AND status = 'pending'", (int(time.time()), contract_id, target_id))
+        await db.commit()
+        return cur.rowcount == 1
 
 
 async def delete_country(user_id: int) -> bool:

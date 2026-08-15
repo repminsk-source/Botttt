@@ -145,7 +145,8 @@ MAIN_INLINE = InlineKeyboardMarkup(inline_keyboard=[
 ])
 
 MORE_INLINE = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="📰 Новости", callback_data="ui:news"), InlineKeyboardButton(text="🌍 Рейтинг", callback_data="ui:top")],
+    [InlineKeyboardButton(text="📰 Мои новости", callback_data="ui:news"), InlineKeyboardButton(text="🌎 Мир", callback_data="ui:world")],
+    [InlineKeyboardButton(text="📜 Торговля", callback_data="ui:trade"), InlineKeyboardButton(text="🌍 Рейтинг", callback_data="ui:top")],
     [InlineKeyboardButton(text="🏛️ Политика", callback_data="ui:policy"), InlineKeyboardButton(text="🤝 Дипломатия", callback_data="ui:diplomacy")],
     [InlineKeyboardButton(text="📖 Помощь", callback_data="ui:guide"), InlineKeyboardButton(text="⬅️ Назад", callback_data="ui:back")],
 ])
@@ -1448,14 +1449,15 @@ async def cmd_year(message: Message):
 
 @dp.message(Command("news"))
 async def cmd_news(message: Message):
-    events = await db.get_recent_events(10)
+    events = await db.get_recent_events_for_user(message.from_user.id, 8)
     if not events:
-        await message.answer("Событий пока не было.")
+        await message.answer("📰 <b>Мои новости</b>\n\nЛичных действий пока не было. Глобальная лента находится в разделе «🌎 Мир».", reply_markup=MORE_INLINE)
         return
-    lines = ["📰 <b>Последние события мира</b>\n"]
+    lines = ["📰 <b>Мои новости</b>", "", "Здесь только решения и последствия твоей страны.", ""]
     for e in events:
-        lines.append(f"• <b>{esc(e['country_name'])}</b>: {esc(e['verdict_text'][:200])}")
-    await message.answer("\n\n".join(lines))
+        lines.append(f"• {esc(e['verdict_text'][:240])}")
+    lines += ["", "Глобальные события: открой «🌎 Мир»." ]
+    await message.answer("\n\n".join(lines), reply_markup=MORE_INLINE)
 
 
 @dp.message(Command("myid"))
@@ -1656,6 +1658,18 @@ async def callback_top(callback: CallbackQuery):
     await finish_callback(callback, "/top", cmd_top)
 
 
+@dp.callback_query(F.data == "ui:world")
+async def callback_world(callback: CallbackQuery):
+    await callback.answer()
+    await render_world_events(callback.message)
+
+
+@dp.callback_query(F.data == "ui:trade")
+async def callback_trade(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer(await _trade_list_text(callback.from_user.id), reply_markup=MORE_INLINE)
+
+
 @dp.callback_query(F.data == "ui:policy")
 async def callback_policy(callback: CallbackQuery):
     await finish_callback(callback, "/policy", cmd_policy)
@@ -1768,6 +1782,117 @@ async def cmd_alliance_info(message: Message):
         for m in members:
             lines.append(f"• {esc(m['name'])}")
     await message.answer("\n".join(lines))
+
+
+TRADE_ALIASES = {
+    "ресурсы": "resources", "resource": "resources", "resources": "resources",
+    "вода": "water", "water": "water", "еда": "food", "food": "food",
+    "дерево": "wood", "wood": "wood", "железо": "iron", "iron": "iron",
+    "уголь": "coal", "coal": "coal", "нефть": "oil", "oil": "oil",
+    "уран": "uranium", "uranium": "uranium",
+}
+
+
+async def _trade_list_text(user_id: int) -> str:
+    contracts = await db.list_trade_contracts(user_id)
+    if not contracts:
+        return "📜 <b>Торговые договоры</b>\n\nАктивных предложений нет.\n\nСоздать: <code>/trade_offer user_id ресурс количество цена</code>"
+    lines = ["📜 <b>Торговые договоры</b>", ""]
+    for item in contracts:
+        role = "тебе предлагают" if item["target_id"] == user_id else "ты предложил"
+        name = item["proposer_name"] if item["target_id"] == user_id else item["target_name"]
+        lines.append(f"#{item['id']} · {role} стране <b>{esc(name or str(item['target_id']))}</b>")
+        lines.append(f"{RESOURCE_NAMES_RU.get(item['resource'], item['resource'])}: {item['amount']:,} за 💰{item['price']:,}")
+        if item["target_id"] == user_id:
+            lines.append(f"Принять: <code>/trade_accept {item['id']}</code> · Отклонить: <code>/trade_reject {item['id']}</code>")
+    return "\n".join(lines)
+
+
+@dp.message(Command("trade"))
+async def cmd_trade(message: Message):
+    await message.answer(await _trade_list_text(message.from_user.id), reply_markup=MORE_INLINE)
+
+
+@dp.message(Command("trade_offer"))
+async def cmd_trade_offer(message: Message):
+    parts = message.text.split()
+    if len(parts) != 5 or not parts[1].isdigit() or not parts[3].isdigit() or not parts[4].isdigit():
+        await message.answer("Формат: <code>/trade_offer user_id ресурс количество цена</code>\nПример: <code>/trade_offer 123456 wood 1000 500</code>")
+        return
+    target_id, amount, price = int(parts[1]), int(parts[3]), int(parts[4])
+    resource = TRADE_ALIASES.get(parts[2].casefold())
+    country = await db.get_country(message.from_user.id)
+    target = await db.get_country(target_id)
+    if not country or not target:
+        await message.answer("Обе страны должны быть зарегистрированы.")
+        return
+    if resource is None or amount <= 0 or price < 0:
+        await message.answer("Ресурс или количество указаны неверно. Доступны: resources, water, food, wood, iron, coal, oil, uranium.")
+        return
+    if country[resource] < amount:
+        await message.answer(f"Недостаточно {RESOURCE_NAMES_RU.get(resource, resource)} для предложения.")
+        return
+    contract_id = await db.create_trade_contract(message.from_user.id, target_id, resource, amount, price, int(time.time()) + 7 * 86400)
+    if not contract_id:
+        await message.answer("Не удалось создать договор. Проверь данные и попробуй снова.")
+        return
+    await message.answer(f"📜 Предложение #{contract_id} создано для страны <b>{esc(target['name'])}</b>. Ресурсы списываются только после принятия.", reply_markup=MORE_INLINE)
+    try:
+        await bot.send_message(target["chat_id"], f"📜 Страна <b>{esc(country['name'])}</b> предлагает договор #{contract_id}: {RESOURCE_NAMES_RU.get(resource, resource)} {amount:,} за 💰{price:,}.\nПринять: <code>/trade_accept {contract_id}</code>")
+    except Exception:
+        logger.info("Не удалось уведомить получателя торгового договора %s", contract_id, exc_info=True)
+
+
+@dp.message(Command("trade_accept"))
+async def cmd_trade_accept(message: Message):
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await message.answer("Формат: <code>/trade_accept номер_договора</code>")
+        return
+    ok = await db.accept_trade_contract(int(parts[1]), message.from_user.id)
+    await message.answer("✅ Договор принят: ресурсы и деньги переведены атомарно." if ok else "❌ Договор нельзя принять: он уже закрыт, истёк или одной из сторон не хватает средств.", reply_markup=MORE_INLINE)
+
+
+@dp.message(Command("trade_reject"))
+async def cmd_trade_reject(message: Message):
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await message.answer("Формат: <code>/trade_reject номер_договора</code>")
+        return
+    ok = await db.reject_trade_contract(int(parts[1]), message.from_user.id)
+    await message.answer("Договор отклонён." if ok else "Договор не найден или уже закрыт.", reply_markup=MORE_INLINE)
+
+
+async def render_world_events(message: Message):
+    events = await db.get_world_events(8)
+    if not events:
+        await message.answer("🌎 <b>Мировая лента</b>\n\nАктивных глобальных событий пока нет.", reply_markup=MORE_INLINE)
+        return
+    lines = ["🌎 <b>Мировая лента</b>", ""]
+    for event in events:
+        year = f" · {event['game_year']} год" if event.get("game_year") else ""
+        lines.append(f"<b>{esc(event['title'])}</b>{year}\n{esc(event['description'])}")
+    await message.answer("\n\n".join(lines), reply_markup=MORE_INLINE)
+
+
+@dp.message(Command("world"))
+async def cmd_world(message: Message):
+    await render_world_events(message)
+
+
+@dp.message(Command("world_event"))
+async def cmd_world_event(message: Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("Команда только для админов.")
+        return
+    payload = message.text.partition(" ")[2]
+    parts = [part.strip() for part in payload.split("|", 2)]
+    if len(parts) != 3 or not all(parts):
+        await message.answer("Формат: <code>/world_event тип | заголовок | описание</code>")
+        return
+    year = await db.get_current_year()
+    event_id = await db.create_world_event(parts[1], parts[2], parts[0], year)
+    await message.answer(f"🌎 Глобальное событие #{event_id} опубликовано.")
 
 
 # --- Админ-команды ---
