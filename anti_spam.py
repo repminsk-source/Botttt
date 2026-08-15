@@ -24,6 +24,21 @@ class AntiSpamMiddleware(BaseMiddleware):
             return f"message:{' '.join((event.text or '').split())}"
         return type(event).__name__
 
+    async def _delete_blocked_message(self, event) -> None:
+        """Remove blocked group messages when the bot has Telegram permission."""
+        chat = getattr(event, "chat", None)
+        if getattr(chat, "type", None) not in {"group", "supergroup"}:
+            return
+        delete = getattr(event, "delete", None)
+        if delete is None:
+            return
+        try:
+            await delete()
+        except Exception:
+            # Missing admin rights or an already deleted message must not
+            # disable the middleware or affect legitimate gameplay.
+            return
+
     async def _notify(self, event, remaining: float) -> None:
         user = getattr(event, "from_user", None)
         user_id = getattr(user, "id", None)
@@ -55,12 +70,15 @@ class AntiSpamMiddleware(BaseMiddleware):
             burst.popleft()
 
         if now - last_event < config.GLOBAL_MESSAGE_COOLDOWN_SECONDS:
+            await self._delete_blocked_message(event)
             await self._notify(event, config.GLOBAL_MESSAGE_COOLDOWN_SECONDS - (now - last_event))
             return
         if key == last_key and now - last_key_at < config.DUPLICATE_MESSAGE_WINDOW_SECONDS:
+            await self._delete_blocked_message(event)
             await self._notify(event, config.DUPLICATE_MESSAGE_WINDOW_SECONDS - (now - last_key_at))
             return
         if len(burst) >= config.SPAM_BURST_LIMIT:
+            await self._delete_blocked_message(event)
             await self._notify(event, config.SPAM_BURST_WINDOW_SECONDS - (now - burst[0]))
             return
 

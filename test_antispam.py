@@ -15,10 +15,15 @@ class FakeMessage:
     def __init__(self, text, user_id=1):
         self.text = text
         self.from_user = SimpleNamespace(id=user_id)
+        self.chat = SimpleNamespace(type="supergroup")
         self.notifications = []
+        self.deleted = False
 
     async def answer(self, text):
         self.notifications.append(text)
+
+    async def delete(self):
+        self.deleted = True
 
 
 async def run_test():
@@ -31,8 +36,10 @@ async def run_test():
 
     first = FakeMessage("/country")
     await middleware(handler, first, {})
-    await middleware(handler, FakeMessage("/country"), {})
+    duplicate = FakeMessage("/country")
+    await middleware(handler, duplicate, {})
     assert calls == ["/country"]
+    assert duplicate.deleted is True
 
     await asyncio.sleep(0.06)
     await middleware(handler, FakeMessage("/progress"), {})
