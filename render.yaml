@@ -42,6 +42,8 @@ services:
       - key: NUKE_COOLDOWN_SECONDS
         value: "3600"
       # Ollama Cloud is reachable from Render; create the key at ollama.com/settings/keys.
+      - key: AI_PROVIDER
+        value: "ollama"
       - key: OLLAMA_ENABLED
         value: "1"
       - key: OLLAMA_BASE_URL

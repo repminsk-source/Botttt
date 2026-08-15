@@ -3,7 +3,7 @@ import re
 import httpx
 from config import (
     GROK_API_KEY, GROK_MODEL, GEMINI_API_KEY, GEMINI_MODEL,
-    OLLAMA_ENABLED, OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_API_KEY,
+    OLLAMA_ENABLED, OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_API_KEY, AI_PROVIDER,
 )
 
 # Общая преамбула перед пользовательским вводом во всех промптах. Явно маркирует
@@ -338,10 +338,17 @@ def _compose_war_verdict(parsed: dict) -> dict:
 async def _get_raw(system_prompt: str, user_prompt: str) -> tuple[str, Exception | None]:
     """Пробует Grok, при ошибке — Gemini. Возвращает (raw_text, None) или (None, last_error)."""
     last_error = None
-    callers = []
-    if OLLAMA_ENABLED:
-        callers.append(_call_ollama)
-    callers.extend((_call_grok, _call_gemini))
+    if AI_PROVIDER == "ollama":
+        callers = [_call_ollama] if OLLAMA_ENABLED else []
+    elif AI_PROVIDER == "fallback":
+        callers = ([_call_ollama] if OLLAMA_ENABLED else []) + [_call_grok, _call_gemini]
+    elif AI_PROVIDER == "grok":
+        callers = [_call_grok]
+    elif AI_PROVIDER == "gemini":
+        callers = [_call_gemini]
+    else:
+        callers = [_call_ollama] if OLLAMA_ENABLED else []
+        callers.extend((_call_grok, _call_gemini))
     for caller in callers:
         try:
             raw = await caller(system_prompt, user_prompt)
@@ -351,6 +358,10 @@ async def _get_raw(system_prompt: str, user_prompt: str) -> tuple[str, Exception
         except Exception as e:
             last_error = e
             continue
+    if last_error is None:
+        last_error = RuntimeError(
+            f"AI provider '{AI_PROVIDER}' is not available or is disabled"
+        )
     return None, last_error
 
 

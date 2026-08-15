@@ -20,6 +20,8 @@ OLLAMA_ENABLED = os.getenv("OLLAMA_ENABLED", "1").lower() in {"1", "true", "yes"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "https://ollama.com/v1")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gpt-oss:20b-cloud")
 OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "")
+# Provider mode: ollama = Ollama only, fallback = Ollama then remote fallbacks.
+AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama").strip().lower()
 
 # --- Игровые настройки ---
 DB_PATH = os.getenv("DB_PATH", "gavan.db")
