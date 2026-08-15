@@ -1665,7 +1665,23 @@ async def unknown_group_command(message: Message):
         await answer_topic_safe(
             message,
             "Не понял эту команду. Открой подсказку: <code>/help</code> или <code>/help@имя_бота</code>.",
+            reply_markup=MAIN_KEYBOARD,
         )
+
+
+# Reply keyboards send ordinary text messages. If Telegram still has an older
+# keyboard cached, or a user sends a label with a minor text mismatch, do not
+# silently ignore it: explain the available route and restore the menu.
+@dp.message(F.text)
+async def unhandled_text(message: Message):
+    text = (message.text or "").strip()
+    if not text:
+        return
+    await answer_topic_safe(
+        message,
+        "Я не распознал этот пункт меню. Используй кнопки ниже или открой <b>📖 Помощь</b>.",
+        reply_markup=MAIN_KEYBOARD,
+    )
 
 
 @dp.error()
