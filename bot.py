@@ -44,6 +44,42 @@ spam_guard = AntiSpamMiddleware()
 # One active interface card per player and forum topic. The player is part of
 # the key because a group can contain many independent game sessions.
 _ACTIVE_INTERFACE_MESSAGES: dict[tuple[int, int, int], int] = {}
+_INTERFACE_DELETE_TASKS: dict[tuple[int, int], asyncio.Task] = {}
+
+
+async def _delete_interface_message_later(chat_id: int, message_id: int) -> None:
+    """Delete one bot card after the configured delay, without blocking handlers."""
+    key = (chat_id, message_id)
+    try:
+        delay = config.INTERFACE_MESSAGE_DELETE_SECONDS
+        if delay > 0:
+            await asyncio.sleep(delay)
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=message_id)
+            except (TelegramBadRequest, TelegramForbiddenError) as exc:
+                # The card may already have been deleted manually or by a
+                # concurrent cleanup task; this must never affect gameplay.
+                logger.debug("Delayed interface deletion skipped for %s: %s", message_id, exc)
+    except asyncio.CancelledError:
+        raise
+    finally:
+        _INTERFACE_DELETE_TASKS.pop(key, None)
+        for interface_key, active_id in list(_ACTIVE_INTERFACE_MESSAGES.items()):
+            if active_id == message_id and interface_key[0] == chat_id:
+                _ACTIVE_INTERFACE_MESSAGES.pop(interface_key, None)
+
+
+def _schedule_interface_deletion(chat_id: int, message_id: int) -> None:
+    """Schedule one deletion at most once; zero disables automatic cleanup."""
+    if config.INTERFACE_MESSAGE_DELETE_SECONDS <= 0:
+        return
+    key = (chat_id, message_id)
+    existing = _INTERFACE_DELETE_TASKS.get(key)
+    if existing and not existing.done():
+        return
+    _INTERFACE_DELETE_TASKS[key] = asyncio.create_task(
+        _delete_interface_message_later(chat_id, message_id)
+    )
 
 dp.message.middleware(spam_guard)
 dp.callback_query.middleware(spam_guard)
@@ -93,15 +129,10 @@ async def answer_topic_safe(
             reply_markup=reply_markup,
         )
     key = _interface_key(message, owner_id)
-    previous_id = _ACTIVE_INTERFACE_MESSAGES.get(key)
     _ACTIVE_INTERFACE_MESSAGES[key] = sent.message_id
-    if previous_id is not None and previous_id != sent.message_id:
-        try:
-            await bot.delete_message(chat_id=message.chat.id, message_id=previous_id)
-        except (TelegramBadRequest, TelegramForbiddenError) as exc:
-            # Deletion is deliberately best-effort. Lack of admin rights must
-            # never turn a successful game action into an error.
-            logger.debug("Could not delete previous interface message %s: %s", previous_id, exc)
+    # Do not remove the previous card synchronously. Every card gets its own
+    # readable lifetime, so action results cannot disappear immediately.
+    _schedule_interface_deletion(message.chat.id, sent.message_id)
     return sent
 
 

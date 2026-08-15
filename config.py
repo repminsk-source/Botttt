@@ -114,6 +114,8 @@ MAX_ACTION_LEN = 1500
 # Глобальная защита от спама интерфейса. Она не заменяет игровые таймеры:
 # повтор одного сообщения режется отдельно от честных игровых действий.
 GLOBAL_MESSAGE_COOLDOWN_SECONDS = float(os.getenv("GLOBAL_MESSAGE_COOLDOWN_SECONDS", "1.5"))
+# Interface cards stay readable before automatic cleanup; set to 0 to disable.
+INTERFACE_MESSAGE_DELETE_SECONDS = max(0, int(os.getenv("INTERFACE_MESSAGE_DELETE_SECONDS", "30")))
 DUPLICATE_MESSAGE_WINDOW_SECONDS = float(os.getenv("DUPLICATE_MESSAGE_WINDOW_SECONDS", "4"))
 SPAM_BURST_WINDOW_SECONDS = float(os.getenv("SPAM_BURST_WINDOW_SECONDS", "10"))
 SPAM_BURST_LIMIT = int(os.getenv("SPAM_BURST_LIMIT", "8"))
