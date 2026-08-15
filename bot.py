@@ -1231,8 +1231,8 @@ async def cmd_attack(message: Message):
 
     defender_id = int(parts[1])
     action_text = parts[2].strip()
-    if not action_text:
-        await answer_topic_safe(message, "Опиши атаку после user_id соперника.")
+    if len(action_text) < config.MIN_NARRATIVE_LEN:
+        await answer_topic_safe(message, f"Описание атаки должно содержать минимум {config.MIN_NARRATIVE_LEN} символов.")
         return
     if len(action_text) > config.MAX_ACTION_LEN:
         await answer_topic_safe(message, f"Слишком длинное описание (макс {config.MAX_ACTION_LEN} символов).")
@@ -1942,6 +1942,9 @@ async def cmd_world_event(message: Message):
     parts = [part.strip() for part in payload.split("|", 2)]
     if len(parts) != 3 or not all(parts):
         await answer_topic_safe(message, "Формат: <code>/world_event тип | заголовок | описание</code>")
+        return
+    if len(parts[2]) < config.MIN_NARRATIVE_LEN:
+        await answer_topic_safe(message, f"Описание новости должно содержать минимум {config.MIN_NARRATIVE_LEN} символов.")
         return
     year = await db.get_current_year()
     event_id = await db.create_world_event(parts[1], parts[2], parts[0], year)
