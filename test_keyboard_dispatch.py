@@ -26,6 +26,7 @@ EXPECTED = {
     "ui:guide": "callback_guide",
     "ui:back": "callback_back",
     "premium:open": "callback_premium",
+    "ui:pmc": "callback_pmc",
     "premium:buy": "callback_premium_buy",
 }
 BUILD_CALLBACKS = {

@@ -218,7 +218,8 @@ MORE_INLINE = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="📰 Мои новости", callback_data="ui:news"), InlineKeyboardButton(text="🌎 Мир", callback_data="ui:world")],
     [InlineKeyboardButton(text="📜 Торговля", callback_data="ui:trade"), InlineKeyboardButton(text="🌍 Рейтинг", callback_data="ui:top")],
     [InlineKeyboardButton(text="🏛️ Политика", callback_data="ui:policy"), InlineKeyboardButton(text="🤝 Дипломатия", callback_data="ui:diplomacy")],
-    [InlineKeyboardButton(text="💎 Магазин", callback_data="ui:premium"), InlineKeyboardButton(text="📖 Помощь", callback_data="ui:guide")],
+    [InlineKeyboardButton(text="🏴 ЧВК", callback_data="ui:pmc"), InlineKeyboardButton(text="💎 Магазин", callback_data="ui:premium")],
+    [InlineKeyboardButton(text="📖 Помощь", callback_data="ui:guide")],
     [InlineKeyboardButton(text="⬅️ Назад", callback_data="ui:back")],
 ])
 
@@ -1883,6 +1884,11 @@ async def callback_diplomacy(callback: CallbackQuery):
 @dp.callback_query(F.data == "ui:guide")
 async def callback_guide(callback: CallbackQuery):
     await finish_callback(callback, "/guide", cmd_guide, MAIN_INLINE)
+
+
+@dp.callback_query(F.data == "ui:pmc")
+async def callback_pmc(callback: CallbackQuery):
+    await finish_callback(callback, "/pmc_help", cmd_pmc_help, MORE_INLINE)
 
 
 @dp.message(F.text == "⬅️ Назад")

@@ -4,7 +4,7 @@ from pathlib import Path
 SOURCE = Path(__file__).with_name("bot.py").read_text(encoding="utf-8")
 
 MAIN_LABELS = ["📊 Страна", "📥 Сбор", "🏗️ Строить", "⚔️ Армия", "📈 Прогресс", "☰ Ещё"]
-MORE_LABELS = ["📰 Новости", "🌍 Рейтинг", "🏛️ Политика", "🤝 Дипломатия", "📖 Помощь", "⬅️ Назад"]
+MORE_LABELS = ["📰 Новости", "🌍 Рейтинг", "🏛️ Политика", "🤝 Дипломатия", "🏴 ЧВК", "📖 Помощь", "⬅️ Назад"]
 
 
 def test_all_visible_buttons_have_routes():
