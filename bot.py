@@ -245,7 +245,8 @@ BUILD_INLINE = InlineKeyboardMarkup(inline_keyboard=[
 COUNTRY_INLINE = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="📊 Сводка", callback_data="ui:country"), InlineKeyboardButton(text="💼 Экономика", callback_data="ui:economy")],
     [InlineKeyboardButton(text="⚔️ Армия", callback_data="ui:army"), InlineKeyboardButton(text="📈 Прогресс", callback_data="ui:progress")],
-    [InlineKeyboardButton(text="🏗️ Строить", callback_data="ui:build"), InlineKeyboardButton(text="⬅️ Главное меню", callback_data="ui:back")],
+    [InlineKeyboardButton(text="🏗️ Строить", callback_data="ui:build"), InlineKeyboardButton(text="🏴 ЧВК", callback_data="ui:pmc")],
+    [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="ui:back")],
 ])
 
 ECONOMY_INLINE = InlineKeyboardMarkup(inline_keyboard=[
@@ -271,10 +272,8 @@ PMC_INLINE = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="👥 Набор", callback_data="pmc:recruit"), InlineKeyboardButton(text="💰 Бюджет", callback_data="pmc:fund")],
     [InlineKeyboardButton(text="⚔️ Операция", callback_data="pmc:action"), InlineKeyboardButton(text="📰 Новости", callback_data="pmc:news")],
     [InlineKeyboardButton(text="🌐 Организации", callback_data="pmc:list"), InlineKeyboardButton(text="📖 Правила", callback_data="pmc:help")],
-    [InlineKeyboardButton(text="⬅️ Разделы", callback_data="ui:more")],
+        [InlineKeyboardButton(text="🌍 Страна", callback_data="mode:country"), InlineKeyboardButton(text="⬅️ Разделы", callback_data="ui:more")],
 ])
-
-
 def callback_message(callback: CallbackQuery, text: str) -> Message:
     """Route a callback action under the clicker's identity, never the card author."""
     return callback.message.model_copy(update={"from_user": callback.from_user, "text": text})
@@ -626,7 +625,13 @@ async def format_country_economy(c: dict) -> str:
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
-    existing = await db.get_country(message.from_user.id)
+    user_id = message.from_user.id
+    existing = await db.get_country(user_id)
+    pmc = await db.get_pmc_by_owner(user_id)
+    if pmc:
+        await animate(message, ["🏴 Загружаю профиль организации…", "✅ Центр ЧВК готов!"])
+        await render_pmc_dashboard(message, owner_id=user_id)
+        return
     if existing:
         await animate(message, ["🌍 Загружаю твою державу…", "✅ С возвращением в ВПИ ГАВАНЬ!"])
         await answer_topic_safe(message, "С возвращением. Открой «📊 Моя страна» — там уже показана одна конкретная следующая цель, а не список из десятков команд.", reply_markup=MAIN_INLINE)
@@ -1939,6 +1944,16 @@ async def render_pmc_dashboard(message: Message, owner_id: int | None = None):
 @dp.message(F.text == "🏴 ЧВК")
 async def menu_pmc(message: Message):
     await render_pmc_dashboard(message)
+
+
+@dp.callback_query(F.data == "mode:country")
+async def callback_mode_country(callback: CallbackQuery):
+    await callback.answer()
+    country = await db.get_country(callback.from_user.id)
+    if not country:
+        await answer_topic_safe(callback.message, "Страна ещё не создана. Используй <code>/founding Название</code>.", reply_markup=PMC_INLINE, owner_id=callback.from_user.id)
+        return
+    await answer_topic_safe(callback.message, await format_country_summary(country), reply_markup=COUNTRY_INLINE, owner_id=callback.from_user.id)
 
 
 @dp.callback_query(F.data == "ui:pmc")

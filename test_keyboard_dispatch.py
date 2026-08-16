@@ -27,10 +27,11 @@ EXPECTED = {
     "ui:back": "callback_back",
     "premium:open": "callback_premium",
     "ui:pmc": "callback_pmc",
+    "mode:country": "callback_mode_country",
     "premium:buy": "callback_premium_buy",
 }
 PMC_CALLBACKS = {
-    "pmc:profile", "pmc:requests", "pmc:recruit", "pmc:fund", "pmc:action", "pmc:news", "pmc:list", "pmc:help", "ui:more",
+    "pmc:profile", "pmc:requests", "pmc:recruit", "pmc:fund", "pmc:action", "pmc:news", "pmc:list", "pmc:help", "mode:country", "ui:more",
 }
 BUILD_CALLBACKS = {
     "build:farm", "build:mine", "build:market", "build:well", "build:granary",
