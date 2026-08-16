@@ -958,6 +958,13 @@ async def cmd_collect(message: Message):
         policy = config.POLICY_DEFINITIONS.get(country.get("policy", "development"), config.POLICY_DEFINITIONS["development"])
         policy_multiplier = policy["production_multiplier"]
         gains = {resource: max(1, int(amount * policy_multiplier)) for resource, amount in gains.items()}
+        active_sanctions = await db.get_active_country_sanctions(message.from_user.id)
+        economic_sanctions = sum(1 for item in active_sanctions if item["sanction_type"] == "economic")
+        trade_sanctions = sum(1 for item in active_sanctions if item["sanction_type"] == "trade")
+        if economic_sanctions:
+            gains = {resource: max(1, int(amount * (0.75 ** economic_sanctions))) if resource in {"gold", "resources"} else amount for resource, amount in gains.items()}
+        if trade_sanctions:
+            gains = {resource: max(1, int(amount * (0.80 ** trade_sanctions))) if resource in {"wood", "iron", "coal", "oil", "uranium", "resources"} else amount for resource, amount in gains.items()}
         labor_focus = country.get("labor_focus", "balanced")
         if labor_focus == "civilian":
             gains = {resource: max(1, int(amount * (1.15 if resource in {"gold", "resources", "food", "water"} else 0.85))) for resource, amount in gains.items()}
@@ -1027,6 +1034,8 @@ async def cmd_collect(message: Message):
         lines.append(f"🎁 Стартовый сбор: +{config.FIRST_COLLECT_GOLD_BONUS:,} денег")
     if luck_boost_used:
         lines.append("⚡ Буст удачи применён: этот сбор увеличен на 25%.")
+    if active_sanctions:
+        lines.append(f"⚠️ Активные санкции: {len(active_sanctions)}. Экономические и торговые доходы снижены.")
     if economy_growth > 0:
         lines.append(f"💰 Экономика: +{economy_growth} (от развития построек)")
     if population_growth > 0:
@@ -2120,6 +2129,36 @@ async def _trade_list_text(user_id: int) -> str:
     return "\n".join(lines)
 
 
+@dp.message(Command("sanction"))
+async def cmd_sanction(message: Message):
+    parts = message.text.split(maxsplit=4)
+    if len(parts) < 5 or not parts[1].isdigit() or not parts[3].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/sanction user_id economic|trade|diplomatic дни причина</code>")
+        return
+    sanction_id = await db.create_country_sanction(message.from_user.id, int(parts[1]), parts[2].lower(), int(parts[3]), parts[4])
+    if not sanction_id:
+        await answer_topic_safe(message, "Не удалось наложить санкции. Проверь страну, тип, срок 1–30 дней, лимит в 3 активные санкции и отсутствие такого же действующего ограничения.")
+        return
+    await answer_topic_safe(message, f"⚠️ Санкции #{sanction_id} введены на {parts[3]} дн. Условия будут видны в <code>/sanctions</code>.")
+
+
+@dp.message(Command("sanctions"))
+async def cmd_sanctions(message: Message):
+    items = await db.list_country_sanctions(message.from_user.id)
+    if not items:
+        await answer_topic_safe(message, "⚠️ У страны нет активных или недавних санкций.")
+        return
+    labels = {"economic": "экономические", "trade": "торговые", "diplomatic": "дипломатические"}
+    lines = ["⚠️ <b>Санкции страны</b>", ""]
+    for item in items:
+        if item["issuer_id"] == message.from_user.id:
+            other, role = item.get("target_name") or str(item["target_id"]), "введены против"
+        else:
+            other, role = item.get("issuer_name") or str(item["issuer_id"]), "наложены страной"
+        lines.append(f"• #{item['id']} · {labels[item['sanction_type']]} · {role} <b>{esc(other)}</b> · <b>{item['status']}</b>\n  Причина: {esc(item['reason'])}")
+    await answer_topic_safe(message, "\n\n".join(lines))
+
+
 @dp.message(Command("pact_offer"))
 async def cmd_pact_offer(message: Message):
     parts = message.text.split(maxsplit=4)
@@ -2718,6 +2757,8 @@ async def cmd_help(message: Message):
         "<code>/pact_offer ID тип дни условия</code> — предложить дипломатический пакт\n"
         "<code>/pacts</code> — свои предложения и действующие пакты\n"
         "<code>/pact_accept ID</code> / <code>/pact_reject ID</code> — ответить на предложение\n"
+        "<code>/sanction ID тип дни причина</code> — наложить санкции на страну\n"
+        "<code>/sanctions</code> — действующие и недавние санкции\n"
         "<code>/priority</code> — приоритет гражданского производства или армии\n"
     )
     if is_admin(message.from_user.id):

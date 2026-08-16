@@ -153,6 +153,20 @@ CREATE TABLE IF NOT EXISTS diplomatic_pacts (
 
 CREATE INDEX IF NOT EXISTS idx_diplomatic_pacts_parties ON diplomatic_pacts(proposer_id, target_id, status);
 
+CREATE TABLE IF NOT EXISTS country_sanctions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    issuer_id INTEGER NOT NULL,
+    target_id INTEGER NOT NULL,
+    sanction_type TEXT NOT NULL CHECK(sanction_type IN ('economic', 'trade', 'diplomatic')),
+    reason TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'expired', 'cancelled'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_country_sanctions_target ON country_sanctions(target_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_country_sanctions_issuer ON country_sanctions(issuer_id, status);
+
 CREATE TABLE IF NOT EXISTS buildings (
     user_id INTEGER NOT NULL,
     building_type TEXT NOT NULL,
@@ -799,6 +813,51 @@ async def resolve_diplomatic_pact(pact_id: int, target_id: int, accept: bool, ti
         await db.execute("UPDATE diplomatic_pacts SET status = ?, resolved_at = ? WHERE id = ?", (status, timestamp, pact_id))
         await db.commit()
         return {**dict(pact), "status": status}
+
+
+async def create_country_sanction(issuer_id: int, target_id: int, sanction_type: str, duration_days: int, reason: str, timestamp: int | None = None):
+    timestamp = int(timestamp or time.time())
+    reason = " ".join(str(reason or "").split())[:500]
+    if issuer_id == target_id or sanction_type not in {"economic", "trade", "diplomatic"} or not reason or duration_days < 1 or duration_days > 30:
+        return None
+    async with _connect() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT 1 FROM countries WHERE user_id IN (?, ?)", (issuer_id, target_id))
+        if len(await cur.fetchall()) != 2:
+            await db.rollback()
+            return None
+        cur = await db.execute("SELECT COUNT(*) FROM country_sanctions WHERE issuer_id = ? AND status = 'active' AND expires_at > ?", (issuer_id, timestamp))
+        if (await cur.fetchone())[0] >= 3:
+            await db.rollback()
+            return None
+        cur = await db.execute("SELECT 1 FROM country_sanctions WHERE issuer_id = ? AND target_id = ? AND sanction_type = ? AND status = 'active' AND expires_at > ?", (issuer_id, target_id, sanction_type, timestamp))
+        if await cur.fetchone():
+            await db.rollback()
+            return None
+        cur = await db.execute("INSERT INTO country_sanctions (issuer_id, target_id, sanction_type, reason, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)", (issuer_id, target_id, sanction_type, reason, timestamp, timestamp + duration_days * 86400))
+        await db.commit()
+        return int(cur.lastrowid)
+
+
+async def get_active_country_sanctions(target_id: int, timestamp: int | None = None):
+    timestamp = int(timestamp or time.time())
+    async with _connect() as db:
+        await db.execute("UPDATE country_sanctions SET status = 'expired' WHERE status = 'active' AND expires_at <= ?", (timestamp,))
+        await db.commit()
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT s.*, c.name AS issuer_name FROM country_sanctions s LEFT JOIN countries c ON c.user_id = s.issuer_id WHERE s.target_id = ? AND s.status = 'active' AND s.expires_at > ? ORDER BY s.id DESC", (target_id, timestamp))
+        return [dict(row) for row in await cur.fetchall()]
+
+
+async def list_country_sanctions(user_id: int, limit: int = 20):
+    timestamp = int(time.time())
+    async with _connect() as db:
+        await db.execute("UPDATE country_sanctions SET status = 'expired' WHERE status = 'active' AND expires_at <= ?", (timestamp,))
+        await db.commit()
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT s.*, a.name AS issuer_name, b.name AS target_name FROM country_sanctions s LEFT JOIN countries a ON a.user_id = s.issuer_id LEFT JOIN countries b ON b.user_id = s.target_id WHERE s.issuer_id = ? OR s.target_id = ? ORDER BY s.id DESC LIMIT ?", (user_id, user_id, limit))
+        return [dict(row) for row in await cur.fetchall()]
 
 
 async def delete_country(user_id: int) -> bool:
