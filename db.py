@@ -256,6 +256,7 @@ CREATE TABLE IF NOT EXISTS pmcs (
     equipment INTEGER NOT NULL DEFAULT 0 CHECK(equipment >= 0),
     inventory_gold INTEGER NOT NULL DEFAULT 0 CHECK(inventory_gold >= 0),
     last_recruit_at INTEGER NOT NULL DEFAULT 0,
+    last_action_at INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );
 
@@ -334,6 +335,7 @@ MIGRATIONS = [
     "ALTER TABLE countries ADD COLUMN real_gdp_usd REAL",
     "ALTER TABLE countries ADD COLUMN real_gdp_per_capita_usd REAL",
     "ALTER TABLE countries ADD COLUMN real_life_expectancy REAL",
+    "ALTER TABLE pmcs ADD COLUMN last_action_at INTEGER NOT NULL DEFAULT 0",
 ]
 
 # Разрешённые имена колонок для update_stat/update_resource.
@@ -651,14 +653,48 @@ async def create_country_statement(user_id: int, country_name: str, statement: s
 
 
 async def create_pmc_statement(pmc_id: int, organization_name: str, statement: str, game_year: int | None = None, timestamp: int | None = None):
+    from config import STATEMENT_COOLDOWN_SECONDS
     timestamp = int(timestamp or time.time())
     statement = " ".join(str(statement or "").split())[:1000]
     if not statement:
         return None
     async with _connect() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        cur = await db.execute("SELECT status FROM pmcs WHERE id = ?", (pmc_id,))
+        organization = await cur.fetchone()
+        if not organization or organization[0] != "active":
+            await db.rollback()
+            return None
+        cur = await db.execute("SELECT created_at FROM pmc_statements WHERE pmc_id = ? ORDER BY id DESC LIMIT 1", (pmc_id,))
+        previous = await cur.fetchone()
+        if previous and timestamp - int(previous[0]) < STATEMENT_COOLDOWN_SECONDS:
+            await db.rollback()
+            return None
         cur = await db.execute("INSERT INTO pmc_statements (pmc_id, organization_name, statement, game_year, created_at) VALUES (?, ?, ?, ?, ?)", (pmc_id, organization_name, statement, game_year, timestamp))
         await db.commit()
         return int(cur.lastrowid)
+
+
+async def get_pmc_action_cooldown(pmc_id: int, timestamp: int | None = None) -> int:
+    from config import PMC_ACTION_COOLDOWN_SECONDS
+    timestamp = int(timestamp or time.time())
+    async with _connect() as db:
+        cur = await db.execute("SELECT last_action_at FROM pmcs WHERE id = ? AND status = 'active'", (pmc_id,))
+        row = await cur.fetchone()
+    if not row:
+        return -1
+    last_action_at = int(row[0] or 0)
+    if last_action_at <= 0:
+        return 0
+    return max(0, PMC_ACTION_COOLDOWN_SECONDS - (timestamp - last_action_at))
+
+
+async def touch_pmc_action(pmc_id: int, owner_id: int, timestamp: int | None = None) -> bool:
+    timestamp = int(timestamp or time.time())
+    async with _connect() as db:
+        cur = await db.execute("UPDATE pmcs SET last_action_at = ? WHERE id = ? AND owner_id = ? AND status = 'active'", (timestamp, pmc_id, owner_id))
+        await db.commit()
+        return cur.rowcount == 1
 
 
 async def get_recent_pmc_statements(limit: int = 12):
@@ -1595,7 +1631,21 @@ async def create_pmc_request(pmc_id: int, country_id: int, request_text: str, ti
             await conn.rollback()
             return None
         cur = await conn.execute(
-            "SELECT COUNT(*) FROM pmc_contracts WHERE country_id = ? AND status = 'active'",
+            "SELECT 1 FROM pmc_contracts WHERE pmc_id = ? AND country_id = ? AND status = 'active' LIMIT 1",
+            (pmc_id, country_id),
+        )
+        if await cur.fetchone():
+            await conn.rollback()
+            return None
+        cur = await conn.execute(
+            "SELECT 1 FROM pmc_requests WHERE pmc_id = ? AND country_id = ? AND status = 'pending' LIMIT 1",
+            (pmc_id, country_id),
+        )
+        if await cur.fetchone():
+            await conn.rollback()
+            return None
+        cur = await conn.execute(
+            "SELECT COUNT(DISTINCT pmc_id) FROM pmc_contracts WHERE country_id = ? AND status = 'active'",
             (country_id,),
         )
         if (await cur.fetchone())[0] >= 2:
@@ -1644,7 +1694,11 @@ async def resolve_pmc_request(request_id: int, pmc_owner_id: int, accept: bool, 
             await conn.execute("UPDATE pmc_requests SET status = 'rejected', resolved_at = ?, resolved_by = ? WHERE id = ?", (timestamp, pmc_owner_id, request_id))
             await conn.commit()
             return {"accepted": False, **dict(request)}
-        cur = await conn.execute("SELECT COUNT(*) FROM pmc_contracts WHERE country_id = ? AND status = 'active'", (request["country_id"],))
+        cur = await conn.execute("SELECT 1 FROM pmc_contracts WHERE pmc_id = ? AND country_id = ? AND status = 'active' LIMIT 1", (request["pmc_id"], request["country_id"]))
+        if await cur.fetchone():
+            await conn.rollback()
+            return None
+        cur = await conn.execute("SELECT COUNT(DISTINCT pmc_id) FROM pmc_contracts WHERE country_id = ? AND status = 'active'", (request["country_id"],))
         if (await cur.fetchone())[0] >= 2:
             await conn.rollback()
             return None

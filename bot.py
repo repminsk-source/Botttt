@@ -2703,6 +2703,9 @@ async def cmd_pmc_requests(message: Message):
     if not pmc:
         await answer_topic_safe(message, "У тебя нет организации.")
         return
+    if pmc.get("status") != "active":
+        await answer_topic_safe(message, f"Организация «{esc(pmc['name'])}» сейчас имеет статус <b>{esc(pmc['status'])}</b> и не может принимать заказы.")
+        return
     requests = await db.list_pmc_requests(pmc["id"])
     if not requests:
         await answer_topic_safe(message, "Новых анонимных запросов нет.")
@@ -2744,28 +2747,43 @@ async def cmd_pmc_reject(message: Message):
 
 @dp.message(Command("pmc_action"))
 async def cmd_pmc_action(message: Message):
-    pmc = await db.get_pmc_by_owner(message.from_user.id)
+    user_id = message.from_user.id
+    action_text = command_payload(message)
+    if len(action_text) < config.MIN_NARRATIVE_LEN:
+        await answer_topic_safe(message, f"Описание операции должно содержать минимум {config.MIN_NARRATIVE_LEN} символов.")
+        return
+    pmc = await db.get_pmc_by_owner(user_id)
     if not pmc or pmc.get("status") != "active":
         await answer_topic_safe(message, "Сначала создай активную ЧВК: <code>/pmc_create Название</code>")
         return
     if pmc.get("org_type") == "terror":
         await answer_topic_safe(message, "Публичный военный вердикт для террористической организации запрещён. Нужна отдельная RP-процедура куратора.")
         return
-    action_text = command_payload(message)
-    if len(action_text) < config.MIN_NARRATIVE_LEN:
-        await answer_topic_safe(message, f"Описание операции должно содержать минимум {config.MIN_NARRATIVE_LEN} символов.")
-        return
     current_year = await db.get_current_year()
     if current_year is None:
         await answer_topic_safe(message, "Администратор ещё не задал год мира через <code>/set_year год</code>.")
         return
+    lock = get_user_lock(user_id)
+    async with lock:
+        if user_id in _ai_inflight:
+            await answer_topic_safe(message, "⏳ Предыдущая операция ЧВК ещё обрабатывается. Дождись результата.")
+            return
+        remaining = await db.get_pmc_action_cooldown(pmc["id"])
+        if remaining > 0:
+            await answer_topic_safe(message, f"⏳ Следующий военный вердикт ЧВК можно запросить через <b>{format_duration(remaining)}</b>.")
+            return
+        _ai_inflight.add(user_id)
     actor = {"name": pmc["name"], "economy": 0, "military": pmc.get("personnel", 0), "military_bases": 0, "tech": 0, "diplomacy": pmc.get("reputation", 0), "stability": pmc.get("reputation", 50), "readiness": 50, "war_exhaustion": 0, "reputation": pmc.get("reputation", 50)}
     thinking = await message.answer("⚔️ Куратор оценивает операцию ЧВК...")
-    verdict = await ai.get_verdict(actor, action_text, world_context=f"Текущий год мира: {current_year}. Это самостоятельная операция легальной ЧВК. Не меняй характеристики страны и не считай ЧВК государством.")
-    if verdict.get("success") == "error":
-        await thinking.edit_text(esc(verdict.get("verdict_text", "⚠️ Не удалось получить вердикт.")))
-        return
-    await thinking.edit_text(f"📜 <b>Военный вердикт ЧВК «{esc(pmc['name'])}»</b> ({current_year} год)\n\n{verdict['verdict_text']}\n\n<i>Вердикт не изменяет статистику страны автоматически.</i>")
+    try:
+        verdict = await ai.get_verdict(actor, action_text, world_context=f"Текущий год мира: {current_year}. Это самостоятельная операция легальной ЧВК. Не меняй характеристики страны и не считай ЧВК государством.")
+        if verdict.get("success") == "error":
+            await thinking.edit_text(esc(verdict.get("verdict_text", "⚠️ Не удалось получить вердикт.")))
+            return
+        await db.touch_pmc_action(pmc["id"], user_id)
+        await thinking.edit_text(f"📜 <b>Военный вердикт ЧВК «{esc(pmc['name'])}»</b> ({current_year} год)\n\n{verdict['verdict_text']}\n\n<i>Вердикт не изменяет статистику страны автоматически.</i>")
+    finally:
+        _ai_inflight.discard(user_id)
 
 
 @dp.message(Command("pmc_news"))
@@ -2788,6 +2806,9 @@ async def cmd_pmc_news(message: Message):
         return
     year = await db.get_current_year()
     statement_id = await db.create_pmc_statement(pmc["id"], pmc["name"], statement, year)
+    if not statement_id:
+        await answer_topic_safe(message, "Новость не опубликована: кулдаун уже действует или организация недоступна.")
+        return
     await answer_topic_safe(message, f"📰 Новость ЧВК «{esc(pmc['name'])}» опубликована под номером <b>#{statement_id}</b>.", reply_markup=MORE_INLINE)
 
 
@@ -2869,7 +2890,7 @@ async def cmd_help(message: Message):
         "<code>/pmc_requests</code> — входящие заказы ЧВК\n"
         "<code>/pmc_fund сумма</code> — перевести деньги страны в инвентарь\n"
         "<code>/pmc_recruit количество</code> — набор (КД 6 часов)\n"
-        "<code>/pmc_action описание</code> — военный вердикт самостоятельной операции ЧВК\n"
+        "<code>/pmc_action описание</code> — военный вердикт самостоятельной операции ЧВК (КД 10 минут)\n"
         "<code>/pmc_news текст</code> — официальная новость ЧВК\n"
         "<code>/pmc_news_feed</code> — публичная лента новостей ЧВК\n"
         "<code>/pmc_help</code> — подробная инструкция по регистрации и работе ЧВК\n"

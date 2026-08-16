@@ -40,11 +40,12 @@ async def main():
         assert request2
         result2 = await db.resolve_pmc_request(request2, 1001, True, 101)
         assert result2["accepted"] is True
-        request3 = await db.create_pmc_request(pmc_id, 1002, "Ещё один заказ на охрану инфраструктуры и транспортного коридора.", 100)
+        second_pmc = await db.get_pmc_by_owner(1002)
+        request3 = await db.create_pmc_request(second_pmc["id"], 1002, "Ещё один заказ на охрану инфраструктуры и транспортного коридора.", 100)
         assert request3
-        result3 = await db.resolve_pmc_request(request3, 1001, True, 101)
+        result3 = await db.resolve_pmc_request(request3, 1002, True, 101)
         assert result3["accepted"] is True
-        request4 = await db.create_pmc_request(pmc_id, 1002, "Четвёртый запрос на охрану инфраструктуры и транспортного коридора.", 100)
+        request4 = await db.create_pmc_request(pmc_id, 1002, "Повторный контракт той же ЧВК не должен быть создан.", 100)
         assert request4 is None
 
         pmc_row = await db.get_pmc(pmc_id)
@@ -58,6 +59,20 @@ async def main():
         assert await db.sanction_pmc(pmc_id, "inventory_clear", "Тест санкции", 999, 102)
         after = await db.get_pmc(pmc_id)
         assert after["personnel"] == 0 and after["inventory_gold"] == 0
+
+        first_news = await db.create_pmc_statement(pmc_id, "Щит", "Официальное сообщение организации о защите транспортного коридора.", 2020, 200)
+        assert first_news
+        assert await db.create_pmc_statement(pmc_id, "Щит", "Повторная публикация не должна пройти в рамках кулдауна.", 2020, 201) is None
+        later_news = await db.create_pmc_statement(pmc_id, "Щит", "Новое официальное сообщение после завершения установленного кулдауна публикаций.", 2020, 200 + config.STATEMENT_COOLDOWN_SECONDS)
+        assert later_news
+        assert await db.get_recent_pmc_statements(10)
+
+        assert await db.get_pmc_action_cooldown(pmc_id, 300) == 0
+        assert await db.touch_pmc_action(pmc_id, 1001, 300)
+        assert await db.get_pmc_action_cooldown(pmc_id, 301) == config.PMC_ACTION_COOLDOWN_SECONDS - 1
+        assert not await db.touch_pmc_action(pmc_id, 9999, 302)
+        assert await db.sanction_pmc(pmc_id, "disqualify", "Финальная проверка", 999, 400)
+        assert await db.create_pmc_statement(pmc_id, "Щит", "Публикация после дисквалификации запрещена.", 2020, 400 + config.STATEMENT_COOLDOWN_SECONDS) is None
         print("PMC_ANONYMOUS_REQUEST_OK")
         print("PMC_LIMITS_OK")
         print("PMC_SANCTIONS_OK")

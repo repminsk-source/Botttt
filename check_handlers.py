@@ -32,7 +32,7 @@ required_db = [
     "get_world_events", "get_latest_world_event_created_at", "get_premium_balance", "get_premium_items", "grant_premium", "purchase_premium", "consume_premium_item", "create_trade_contract", "accept_trade_contract", "reject_trade_contract",
     "create_alliance", "join_alliance", "leave_alliance", "transfer_country", "delete_country", "get_war_history", "create_country_statement", "get_recent_country_statements", "create_diplomatic_pact", "list_diplomatic_pacts", "resolve_diplomatic_pact", "create_country_sanction", "get_active_country_sanctions", "list_country_sanctions", "set_tax_rate", "set_labor_focus",
     "create_pmc", "get_pmc", "get_pmc_by_owner", "list_active_pmcs", "create_pmc_request", "list_pmc_requests", "get_pmc_request",
-    "resolve_pmc_request", "recruit_pmc", "sanction_pmc", "fund_pmc", "create_pmc_statement", "get_recent_pmc_statements",
+    "resolve_pmc_request", "recruit_pmc", "sanction_pmc", "fund_pmc", "create_pmc_statement", "get_recent_pmc_statements", "get_pmc_action_cooldown", "touch_pmc_action",
 ]
 missing_db = [name for name in required_db if not hasattr(db, name)]
 assert not missing_db, f"missing db functions: {missing_db}"
