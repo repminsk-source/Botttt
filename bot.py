@@ -111,6 +111,16 @@ def _interface_key(message: Message, owner_id: int | None = None) -> tuple[int, 
     )
 
 
+async def hide_group_command(message: Message) -> None:
+    """Remove secret command text from group chats when Telegram permits it."""
+    if getattr(message.chat, "type", "private") not in ("group", "supergroup"):
+        return
+    try:
+        await message.delete()
+    except Exception:
+        logger.info("Не удалось скрыть секретную команду в группе", exc_info=True)
+
+
 async def answer_topic_safe(
     message: Message,
     text: str,
@@ -1309,6 +1319,7 @@ async def cmd_attack(message: Message):
                 await answer_topic_safe(message, "У тебя уже есть незавершённая война. Дождись ответа защитника.")
                 return
             await db.touch_last_attack(attacker_id, int(time.time()))
+            await hide_group_command(message)
             await answer_topic_safe(
                 message,
                 f"⚔️ Атака #{pending_id} объявлена против «{esc(defender['name'])}».\n"
@@ -1441,6 +1452,7 @@ async def cmd_defend(message: Message):
     if not await db.claim_pending_war(war_id, message.from_user.id, defense_text, int(time.time())):
         await answer_topic_safe(message, "На эту войну уже ответили или она обрабатывается.")
         return
+    await hide_group_command(message)
     current_year = await db.get_current_year()
     combined_text = f"Атака: {pending['attack_text']}\nОборона: {defense_text}"
     thinking_msg = await message.answer("⚔️ Ведущий рассматривает действия атакующей и обороняющейся стороны...")
