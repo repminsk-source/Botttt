@@ -2043,9 +2043,67 @@ async def cmd_trade_reject(message: Message):
     await answer_topic_safe(message, "Договор отклонён." if ok else "Договор не найден или уже закрыт.", reply_markup=MORE_INLINE)
 
 
+def _compact_rank_value(value: float) -> str:
+    value = int(max(0, value))
+    if value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.1f} млрд"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f} млн"
+    return f"{value:,}".replace(",", " ")
+
+
+async def build_world_rankings() -> list[str]:
+    countries = await db.get_all_countries()
+    if not countries:
+        return []
+
+    # Wealth is a transparent game score: capital is primary, economy and
+    # productive reserves provide the strategic depth behind the balance.
+    richest = sorted(
+        countries,
+        key=lambda c: (
+            c.get("gold", 0) + c.get("economy", 0) * 1_000_000
+            + c.get("resources", 0) * 2 + c.get("food", 0) + c.get("water", 0),
+            c.get("gold", 0),
+        ),
+        reverse=True,
+    )[:5]
+    # Intimidation reflects actual military capacity, readiness and bases,
+    # with technology and reputation as secondary factors.
+    intimidating = sorted(
+        countries,
+        key=lambda c: (
+            c.get("military", 0) + c.get("military_bases", 0) * 10
+            + c.get("readiness", 0) * 2 + c.get("tech", 0) * 0.5
+            + c.get("reputation", 0) * 0.25 - c.get("war_exhaustion", 0) * 0.5,
+            c.get("military", 0),
+        ),
+        reverse=True,
+    )[:5]
+
+    rich_lines = ["💰 <b>САМЫЕ БОГАТЫЕ СТРАНЫ</b>", "", "Рейтинг капитала и экономической мощи мира:"]
+    for index, country in enumerate(richest, 1):
+        wealth = country.get("gold", 0) + country.get("economy", 0) * 1_000_000
+        rich_lines.append(
+            f"{index}. <b>{esc(country['name'])}</b> — капитал {_compact_rank_value(country.get('gold', 0))}; "
+            f"экономика {country.get('economy', 0)} · общий индекс {_compact_rank_value(wealth)}"
+        )
+
+    fear_lines = ["🛡️ <b>САМЫЕ УСТРАШАЮЩИЕ СТРАНЫ МИРА</b>", "", "Рейтинг военной силы, готовности и способности вести войну:"]
+    for index, country in enumerate(intimidating, 1):
+        threat = country.get("military", 0) + country.get("military_bases", 0) * 10 + country.get("readiness", 0) * 2
+        fear_lines.append(
+            f"{index}. <b>{esc(country['name'])}</b> — армия {country.get('military', 0):,}; "
+            f"базы {country.get('military_bases', 0)} · готовность {country.get('readiness', 0)} · индекс угрозы {int(threat)}"
+        )
+    return ["\n".join(rich_lines), "\n".join(fear_lines)]
+
+
 async def render_world_events(message: Message, owner_id: int | None = None):
     events = await db.get_world_events(8)
-    if not events:
+    ranking_articles = await build_world_rankings()
+    if not events and not ranking_articles:
+
         await answer_topic_safe(
             message,
             "🌎 <b>Мировая лента</b>\n\nАктивных глобальных событий пока нет.",
@@ -2054,6 +2112,9 @@ async def render_world_events(message: Message, owner_id: int | None = None):
         )
         return
     lines = ["🌎 <b>Мировая лента</b>", ""]
+    for article in ranking_articles:
+        lines.append(f"<i>📰 Газета · {time.strftime('%H:%M')}</i>\n{article}")
+        lines.append("")
     for event in events:
         year = f" · {event['game_year']} год" if event.get("game_year") else ""
         lines.append(f"<b>{esc(event['title'])}</b>{year}\n{esc(event['description'])}")
