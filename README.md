@@ -55,7 +55,7 @@ python bot.py
 
 ## Render
 
-Для polling-бота используется **Background Worker**. Blueprint подхватывает `render.yaml`; вручную укажите `pip install -r requirements.txt` как build command и `python bot.py` как start command. Добавьте `BOT_TOKEN`, `ADMIN_IDS` и `OLLAMA_API_KEY`. SQLite-файл на бесплатном Render не является надёжным постоянным хранилищем: для реального сервера нужен Persistent Disk или перенос базы на внешнюю PostgreSQL-инфраструктуру.
+Для polling-бота используется **Background Worker**. Blueprint подхватывает `render.yaml`; вручную укажите `pip install -r requirements.txt` как build command и `python bot.py` как start command. Добавьте `BOT_TOKEN`, `ADMIN_IDS` и `OLLAMA_API_KEY`. Для текущего доступного тарифа используйте `OLLAMA_MODEL=gpt-oss:20b-cloud`; Qwen Cloud требует отдельного права доступа. Одновременно должен работать только один polling-экземпляр бота: если запустить `python bot.py` локально и оставить Render Worker, Telegram выдаст `TelegramConflictError` и будет переключать источник обновлений. SQLite-файл на бесплатном Render не является надёжным постоянным хранилищем: для реального сервера нужен Persistent Disk или перенос базы на внешнюю PostgreSQL-инфраструктуру.
 
 ## Проверка перед деплоем
 
