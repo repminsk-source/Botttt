@@ -931,7 +931,7 @@ async def cmd_collect(message: Message):
         premium_items = await db.get_premium_items(message.from_user.id)
         luck_boost_used = premium_items.get("luck_boost", 0) > 0
         if luck_boost_used:
-            gains = {resource: max(1, int(amount * 1.5)) for resource, amount in gains.items()}
+            gains = {resource: max(1, int(amount * 1.25)) for resource, amount in gains.items()}
         if country.get("policy") == "welfare":
             for resource in ("food", "water"):
                 if resource in gains:
@@ -991,7 +991,7 @@ async def cmd_collect(message: Message):
     if is_first_collect:
         lines.append(f"🎁 Стартовый сбор: +{config.FIRST_COLLECT_GOLD_BONUS:,} денег")
     if luck_boost_used:
-        lines.append("⚡ Буст удачи применён: доход увеличен на 50%.")
+        lines.append("⚡ Буст удачи применён: этот сбор увеличен на 25%.")
     if economy_growth > 0:
         lines.append(f"💰 Экономика: +{economy_growth} (от развития построек)")
     if population_growth > 0:

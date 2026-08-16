@@ -421,7 +421,7 @@ async def purchase_premium(user_id: int, item_key: str, cost: int, reason: str, 
             await db.rollback()
             return False
         if item_key == "territory_expansion":
-            await db.execute("UPDATE countries SET territory = territory + 5000 WHERE user_id = ?", (user_id,))
+            await db.execute("UPDATE countries SET territory = territory + 2500 WHERE user_id = ?", (user_id,))
         await db.execute(
             "INSERT INTO premium_items(user_id, item_key, quantity, expires_at) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(user_id, item_key) DO UPDATE SET quantity = quantity + excluded.quantity, expires_at = excluded.expires_at",

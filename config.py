@@ -131,10 +131,10 @@ MIN_NARRATIVE_LEN = 50
 PREMIUM_CURRENCY_NAME = "Гаванские кредиты"
 PREMIUM_CURRENCY_SHORT = "ГК"
 PREMIUM_SHOP = {
-    "luck_boost": {"name": "Буст удачи", "cost": 10, "description": "+50% к следующему сбору", "quantity": 1},
-    "territory_expansion": {"name": "Расширение территории", "cost": 50, "description": "+5 000 территории", "quantity": 1},
-    "wipe_protection": {"name": "Защита от вайпа", "cost": 200, "description": "одна защита при сбросе мира", "quantity": 1},
-    "premium_status": {"name": "Премиальный статус", "cost": 150, "description": "особый статус страны на 7 дней", "quantity": 1},
+    "luck_boost": {"name": "Буст удачи", "cost": 250, "description": "+25% к одному следующему сбору; действует один раз", "quantity": 1},
+    "territory_expansion": {"name": "Расширение территории", "cost": 1000, "description": "+2 500 территории; не увеличивает армию автоматически", "quantity": 1},
+    "wipe_protection": {"name": "Защита от вайпа", "cost": 2500, "description": "один заряд сохранения страны при вайпе; не даёт ресурсов", "quantity": 1},
+    "premium_status": {"name": "Премиальный статус", "cost": 1800, "description": "видимый статус страны на 7 дней; без боевого бонуса", "quantity": 1},
 }
 
 

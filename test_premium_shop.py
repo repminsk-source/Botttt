@@ -19,18 +19,18 @@ async def main():
     try:
         await db.init_db()
         await db.create_country(1, 1, "Тестландия")
-        assert await db.grant_premium(1, 200, "Тестовая выдача", 99)
-        assert await db.get_premium_balance(1) == 200
-        assert not await db.purchase_premium(1, "territory_expansion", 500, "Слишком дорого")
-        assert await db.purchase_premium(1, "territory_expansion", 50, "Покупка территории")
+        assert await db.grant_premium(1, 4000, "Тестовая выдача", 99)
+        assert await db.get_premium_balance(1) == 4000
+        assert not await db.purchase_premium(1, "territory_expansion", 5000, "Слишком дорого")
+        assert await db.purchase_premium(1, "territory_expansion", 1000, "Покупка территории")
         country = await db.get_country(1)
-        assert country["territory"] == 105000
-        assert await db.purchase_premium(1, "luck_boost", 10, "Покупка буста")
+        assert country["territory"] == 102500
+        assert await db.purchase_premium(1, "luck_boost", 250, "Покупка буста")
         items = await db.get_premium_items(1)
         assert items["luck_boost"] == 1
         assert await db.consume_premium_item(1, "luck_boost")
         assert not await db.consume_premium_item(1, "luck_boost")
-        assert await db.get_premium_balance(1) == 140
+        assert await db.get_premium_balance(1) == 2750
         assert config.PREMIUM_CURRENCY_NAME == "Гаванские кредиты"
         print("PREMIUM_SHOP_OK")
     finally:
