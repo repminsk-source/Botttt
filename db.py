@@ -168,6 +168,17 @@ CREATE TABLE IF NOT EXISTS country_sanctions (
 CREATE INDEX IF NOT EXISTS idx_country_sanctions_target ON country_sanctions(target_id, status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_country_sanctions_issuer ON country_sanctions(issuer_id, status);
 
+CREATE TABLE IF NOT EXISTS pmc_statements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pmc_id INTEGER NOT NULL,
+    organization_name TEXT NOT NULL,
+    statement TEXT NOT NULL,
+    game_year INTEGER,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pmc_statements_created ON pmc_statements(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS buildings (
     user_id INTEGER NOT NULL,
     building_type TEXT NOT NULL,
@@ -637,6 +648,24 @@ async def create_country_statement(user_id: int, country_name: str, statement: s
         )
         await db.commit()
         return int(cur.lastrowid)
+
+
+async def create_pmc_statement(pmc_id: int, organization_name: str, statement: str, game_year: int | None = None, timestamp: int | None = None):
+    timestamp = int(timestamp or time.time())
+    statement = " ".join(str(statement or "").split())[:1000]
+    if not statement:
+        return None
+    async with _connect() as db:
+        cur = await db.execute("INSERT INTO pmc_statements (pmc_id, organization_name, statement, game_year, created_at) VALUES (?, ?, ?, ?, ?)", (pmc_id, organization_name, statement, game_year, timestamp))
+        await db.commit()
+        return int(cur.lastrowid)
+
+
+async def get_recent_pmc_statements(limit: int = 12):
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM pmc_statements ORDER BY created_at DESC, id DESC LIMIT ?", (max(1, min(int(limit), 50)),))
+        return [dict(row) for row in await cur.fetchall()]
 
 
 async def get_recent_country_statements(limit: int = 12):

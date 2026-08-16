@@ -2742,6 +2742,68 @@ async def cmd_pmc_reject(message: Message):
     await answer_topic_safe(message, "Запрос отклонён." if result else "Запрос не найден или уже обработан.")
 
 
+@dp.message(Command("pmc_action"))
+async def cmd_pmc_action(message: Message):
+    pmc = await db.get_pmc_by_owner(message.from_user.id)
+    if not pmc or pmc.get("status") != "active":
+        await answer_topic_safe(message, "Сначала создай активную ЧВК: <code>/pmc_create Название</code>")
+        return
+    if pmc.get("org_type") == "terror":
+        await answer_topic_safe(message, "Публичный военный вердикт для террористической организации запрещён. Нужна отдельная RP-процедура куратора.")
+        return
+    action_text = command_payload(message)
+    if len(action_text) < config.MIN_NARRATIVE_LEN:
+        await answer_topic_safe(message, f"Описание операции должно содержать минимум {config.MIN_NARRATIVE_LEN} символов.")
+        return
+    current_year = await db.get_current_year()
+    if current_year is None:
+        await answer_topic_safe(message, "Администратор ещё не задал год мира через <code>/set_year год</code>.")
+        return
+    actor = {"name": pmc["name"], "economy": 0, "military": pmc.get("personnel", 0), "military_bases": 0, "tech": 0, "diplomacy": pmc.get("reputation", 0), "stability": pmc.get("reputation", 50), "readiness": 50, "war_exhaustion": 0, "reputation": pmc.get("reputation", 50)}
+    thinking = await message.answer("⚔️ Куратор оценивает операцию ЧВК...")
+    verdict = await ai.get_verdict(actor, action_text, world_context=f"Текущий год мира: {current_year}. Это самостоятельная операция легальной ЧВК. Не меняй характеристики страны и не считай ЧВК государством.")
+    if verdict.get("success") == "error":
+        await thinking.edit_text(esc(verdict.get("verdict_text", "⚠️ Не удалось получить вердикт.")))
+        return
+    await thinking.edit_text(f"📜 <b>Военный вердикт ЧВК «{esc(pmc['name'])}»</b> ({current_year} год)\n\n{verdict['verdict_text']}\n\n<i>Вердикт не изменяет статистику страны автоматически.</i>")
+
+
+@dp.message(Command("pmc_news"))
+async def cmd_pmc_news(message: Message):
+    pmc = await db.get_pmc_by_owner(message.from_user.id)
+    if not pmc or pmc.get("status") != "active":
+        await answer_topic_safe(message, "Сначала создай активную ЧВК.")
+        return
+    if pmc.get("org_type") == "terror":
+        await answer_topic_safe(message, "Террористическая организация не может публиковать официальные новости. Для скрытой RP-подачи нужен куратор.")
+        return
+    statement = command_payload(message)
+    if len(statement) < config.MIN_NARRATIVE_LEN:
+        await answer_topic_safe(message, f"Новость ЧВК должна содержать минимум {config.MIN_NARRATIVE_LEN} символов.")
+        return
+    recent = await db.get_recent_pmc_statements(50)
+    last = next((item for item in recent if item["pmc_id"] == pmc["id"]), None)
+    if last and int(time.time()) - int(last["created_at"]) < config.STATEMENT_COOLDOWN_SECONDS:
+        await answer_topic_safe(message, f"Следующую новость ЧВК можно опубликовать через <b>{format_duration(config.STATEMENT_COOLDOWN_SECONDS - (int(time.time()) - int(last['created_at'])))}</b>.")
+        return
+    year = await db.get_current_year()
+    statement_id = await db.create_pmc_statement(pmc["id"], pmc["name"], statement, year)
+    await answer_topic_safe(message, f"📰 Новость ЧВК «{esc(pmc['name'])}» опубликована под номером <b>#{statement_id}</b>.", reply_markup=MORE_INLINE)
+
+
+@dp.message(Command("pmc_news_feed"))
+async def cmd_pmc_news_feed(message: Message):
+    statements = await db.get_recent_pmc_statements(12)
+    if not statements:
+        await answer_topic_safe(message, "📰 Публичных новостей ЧВК пока нет.", reply_markup=MORE_INLINE)
+        return
+    lines = ["📰 <b>Новости ЧВК</b>", ""]
+    for item in statements:
+        year = f" · {item['game_year']} год" if item.get("game_year") else ""
+        lines.append(f"• <b>{esc(item['organization_name'])}</b>{year}\n{esc(item['statement'][:500])}")
+    await answer_topic_safe(message, "\n\n".join(lines), reply_markup=MORE_INLINE)
+
+
 @dp.message(Command("pmc_fund"))
 async def cmd_pmc_fund(message: Message):
     parts = message.text.split()
@@ -2807,6 +2869,9 @@ async def cmd_help(message: Message):
         "<code>/pmc_requests</code> — входящие заказы ЧВК\n"
         "<code>/pmc_fund сумма</code> — перевести деньги страны в инвентарь\n"
         "<code>/pmc_recruit количество</code> — набор (КД 6 часов)\n"
+        "<code>/pmc_action описание</code> — военный вердикт самостоятельной операции ЧВК\n"
+        "<code>/pmc_news текст</code> — официальная новость ЧВК\n"
+        "<code>/pmc_news_feed</code> — публичная лента новостей ЧВК\n"
         "<code>/pmc_help</code> — подробная инструкция по регистрации и работе ЧВК\n"
         "<code>/war_history</code> — история завершённых войн своей страны\n"
         "<code>/statement текст</code> — официальное заявление страны (КД 30 минут)\n"
