@@ -146,6 +146,12 @@ INTERFACE_MESSAGE_DELETE_SECONDS = _env_int("INTERFACE_MESSAGE_DELETE_SECONDS", 
 DUPLICATE_MESSAGE_WINDOW_SECONDS = _env_float("DUPLICATE_MESSAGE_WINDOW_SECONDS", 4)
 SPAM_BURST_WINDOW_SECONDS = _env_float("SPAM_BURST_WINDOW_SECONDS", 10)
 SPAM_BURST_LIMIT = _env_int("SPAM_BURST_LIMIT", 8, minimum=1)
+# Group anti-raid: a short storm from several accounts triggers a temporary
+# moderation lockdown. It is separate from per-player gameplay cooldowns.
+GROUP_RAID_WINDOW_SECONDS = _env_float("GROUP_RAID_WINDOW_SECONDS", 15)
+GROUP_RAID_UNIQUE_USERS = _env_int("GROUP_RAID_UNIQUE_USERS", 5, minimum=2)
+GROUP_RAID_LOCKDOWN_SECONDS = _env_int("GROUP_RAID_LOCKDOWN_SECONDS", 60, minimum=10)
+GROUP_RAID_ADMIN_CACHE_SECONDS = _env_int("GROUP_RAID_ADMIN_CACHE_SECONDS", 60, minimum=10)
 
 # Кулдаун между /action у одного игрока, в секундах (0 = выключен)
 ACTION_COOLDOWN_SECONDS = _env_int("ACTION_COOLDOWN_SECONDS", 10 * 60)

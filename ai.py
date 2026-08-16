@@ -52,16 +52,17 @@ SYSTEM_PROMPT = """Ты — независимый ведущий геополи
   весь мир внутренне одного технологического уровня, соответствующего игровому году и характеристике "tech"
   страны, а не смешению реальных исторических эпох.
 - Отвечай СТРОГО в формате JSON, без пояснений до или после, без markdown-разметки.
-- Вердикт должен быть подробным, но не пустым: 8-12 содержательных предложений.
-- Объясни причинно-следственную связь: почему действие сработало или провалилось, какие силы и характеристики повлияли, что изменилось в стране и что игроку разумно делать дальше.
+- Вердикт должен быть игровым и понятным, а не академическим отчётом. Не повторяй исходные характеристики и не выдумывай нулевые показатели, если их нет в контексте.
+- Используй короткие поля: headline — до 100 символов; summary — 2-3 предложения; key_factors — 2-4 коротких причины; risks — 1-3 реальные угрозы; next_actions — 2-3 конкретных действия игрока.
+- Не пиши длинную хронику по этапам и не повторяй одну мысль разными словами. Общий текст всех полей — не более 900 символов.
 
 {
   "success": true/false/"partial",
-  "situation": "Краткая оценка исходной обстановки и готовности страны.",
-  "sequence": "Подробное описание хода действия по этапам.",
-  "verdict_text": "Итоговый вердикт ведущего с объяснением успеха, частичного успеха или провала.",
-  "consequences": "Долгосрочные последствия для экономики, армии, населения, технологий или дипломатии.",
-  "next_step": "Практичный совет игроку, который логично следует из исхода.",
+  "headline": "Короткий вывод: что получилось",
+  "summary": "Что произошло и почему, 2-3 понятных предложения.",
+  "key_factors": ["Причина 1", "Причина 2"],
+  "risks": ["Риск 1"],
+  "next_actions": ["Конкретный следующий шаг 1", "Конкретный следующий шаг 2"],
   "stat_changes": {"economy": 0, "military": 0, "population": 0, "tech": 0, "diplomacy": 0}
 }
 
@@ -88,16 +89,17 @@ WAR_SYSTEM_PROMPT = """Ты — независимый ведущий геопо
   ниже), а не реальному календарному году — не смешивай в описании боя образцы техники из разных
   реальных исторических эпох, весь мир внутренне одного уровня технологий для этого игрового года.
 - Отвечай СТРОГО в формате JSON, без пояснений до или после, без markdown-разметки.
-- Военный вердикт должен содержать 10-14 содержательных предложений: подготовка, первый этап, перелом, реакция обороны, итог и последствия.
+- Военный вердикт должен быть коротким: один ясный итог, 2-3 решающих фактора, потери/риски и конкретные действия обеих сторон.
 - Не объявляй победителя без объяснения, какие характеристики и обстоятельства привели к исходу.
+- Не описывай фантастические детали и не повторяй секретные тексты сторон.
 
 {
   "outcome": "attacker_win" / "defender_win" / "draw",
-  "situation": "Сравнение исходных возможностей сторон и уязвимостей.",
-  "battle_sequence": "Подробный ход столкновения по этапам.",
-  "verdict_text": "Итоговый вердикт и объяснение решающего фактора.",
-  "consequences": "Военные, экономические, демографические и дипломатические последствия для обеих сторон.",
-  "next_step": "Рекомендация, что победителю и проигравшему делать дальше.",
+  "headline": "Короткий итог столкновения",
+  "summary": "Что произошло и какой фактор решил исход, 2-3 предложения.",
+  "key_factors": ["Фактор 1", "Фактор 2"],
+  "risks": ["Главный риск после боя"],
+  "next_actions": {"attacker": ["Шаг атакующего"], "defender": ["Шаг обороняющегося"]},
   "attacker_stat_changes": {"economy": 0, "military": 0, "population": 0, "tech": 0, "diplomacy": 0},
   "defender_stat_changes": {"economy": 0, "military": 0, "population": 0, "tech": 0, "diplomacy": 0}
 }
@@ -351,27 +353,57 @@ def _text(value, fallback: str, limit: int = 550) -> str:
     return value if len(value) <= limit else value[:limit - 1].rstrip() + "…"
 
 
+def _items(value, fallback: str, limit: int = 3) -> list[str]:
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, list):
+        values = value
+    else:
+        values = []
+    result = [_text(item, "", 220) for item in values if str(item or "").strip()]
+    return result[:limit] or [fallback]
+
+
 def _compose_action_verdict(parsed: dict) -> dict:
-    sections = [
-        ("Обстановка", _text(parsed.get("situation"), "Страна начала действие с исходными характеристиками, указанными в заявке.")),
-        ("Ход действия", _text(parsed.get("sequence"), "Действие развивалось постепенно; ведущий учёл доступные ресурсы и характеристики страны.")),
-        ("Итог", _text(parsed.get("verdict_text"), "Действие дало частичный результат.")),
-        ("Последствия", _text(parsed.get("consequences"), "Последствия будут зависеть от того, как страна использует полученный результат.")),
-        ("Следующий шаг", _text(parsed.get("next_step"), "Продолжай развивать слабое место страны и учитывай текущие ограничения.")),
-    ]
-    parsed["verdict_text"] = "\n\n".join(f"{title}:\n{text}" for title, text in sections)
+    success = parsed.get("success", "partial")
+    label = {True: "УСПЕХ", False: "ПРОВАЛ", "partial": "ЧАСТИЧНЫЙ УСПЕХ"}.get(success, "ЧАСТИЧНЫЙ УСПЕХ")
+    headline = _text(parsed.get("headline"), "Действие дало ограниченный результат.", 120)
+    summary = _text(parsed.get("summary") or parsed.get("verdict_text"), "Результат ограничен ресурсами и текущими характеристиками страны.", 360)
+    factors = _items(parsed.get("key_factors") or parsed.get("situation"), "Решение зависело от доступных ресурсов и характеристик страны.")
+    risks = _items(parsed.get("risks") or parsed.get("consequences"), "Сохраняется риск замедления дальнейшего развития.", 2)
+    actions = _items(parsed.get("next_actions") or parsed.get("next_step"), "Укрепи слабое место страны перед следующим действием.", 3)
+    lines = [f"🎯 <b>{label}: {headline}</b>", f"\n{summary}", "\n<b>Почему:</b>"]
+    lines.extend(f"• {item}" for item in factors)
+    lines.append("\n<b>Риски:</b>")
+    lines.extend(f"• {item}" for item in risks)
+    lines.append("\n<b>Следующие шаги:</b>")
+    lines.extend(f"{index}. {item}" for index, item in enumerate(actions, 1))
+    parsed["verdict_text"] = "\n".join(lines)
     return parsed
 
 
 def _compose_war_verdict(parsed: dict) -> dict:
-    sections = [
-        ("Соотношение сил", _text(parsed.get("situation"), "Исход определён совокупностью военных, экономических и технологических факторов.")),
-        ("Ход столкновения", _text(parsed.get("battle_sequence"), "Стороны обменялись ударами, после чего одна из них получила преимущество.")),
-        ("Итог", _text(parsed.get("verdict_text"), "Столкновение завершилось указанным в вердикте исходом.")),
-        ("Последствия", _text(parsed.get("consequences"), "Обеим сторонам придётся учитывать потери и изменение баланса сил.")),
-        ("Что дальше", _text(parsed.get("next_step"), "Победителю следует закрепить результат, а проигравшему — восстановить потенциал.")),
-    ]
-    parsed["verdict_text"] = "\n\n".join(f"{title}:\n{text}" for title, text in sections)
+    outcome = parsed.get("outcome", "draw")
+    label = {"attacker_win": "ПОБЕДА АТАКУЮЩЕГО", "defender_win": "ПОБЕДА ОБОРОНЯЮЩЕГОСЯ", "draw": "НИЧЬЯ"}.get(outcome, "НИЧЬЯ")
+    headline = _text(parsed.get("headline"), "Столкновение завершилось без решающего перевеса.", 120)
+    summary = _text(parsed.get("summary") or parsed.get("verdict_text"), "Исход определён соотношением сил, подготовкой и устойчивостью обороны.", 360)
+    factors = _items(parsed.get("key_factors") or parsed.get("situation"), "Решение определили баланс армии, технологии и готовность сторон.")
+    risks = _items(parsed.get("risks") or parsed.get("consequences"), "После боя обеим сторонам нужно восстановить военный потенциал.", 2)
+    next_actions = parsed.get("next_actions")
+    if isinstance(next_actions, dict):
+        attacker_steps = _items(next_actions.get("attacker"), "Атакующему следует оценить потери и закрепить результат.", 2)
+        defender_steps = _items(next_actions.get("defender"), "Обороняющемуся следует восстановить армию и укрепить рубежи.", 2)
+    else:
+        attacker_steps = defender_steps = _items(next_actions or parsed.get("next_step"), "Обеим сторонам следует восстановить силы и пересмотреть план.", 2)
+    lines = [f"⚔️ <b>{label}: {headline}</b>", f"\n{summary}", "\n<b>Решающие факторы:</b>"]
+    lines.extend(f"• {item}" for item in factors)
+    lines.append("\n<b>Риски после боя:</b>")
+    lines.extend(f"• {item}" for item in risks)
+    lines.append("\n<b>Атакующему:</b>")
+    lines.extend(f"• {item}" for item in attacker_steps)
+    lines.append("\n<b>Обороняющемуся:</b>")
+    lines.extend(f"• {item}" for item in defender_steps)
+    parsed["verdict_text"] = "\n".join(lines)
     return parsed
 
 

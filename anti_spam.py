@@ -15,6 +15,9 @@ class AntiSpamMiddleware(BaseMiddleware):
         self._last_key: dict[int, tuple[str, float]] = {}
         self._burst: dict[int, deque[float]] = defaultdict(deque)
         self._last_notice: dict[int, float] = {}
+        self._chat_burst: dict[int, deque[tuple[float, int]]] = defaultdict(deque)
+        self._chat_lockdown_until: dict[int, float] = {}
+        self._admin_cache: dict[tuple[int, int], tuple[float, bool]] = {}
 
     @staticmethod
     def _event_key(event) -> str:
@@ -39,6 +42,61 @@ class AntiSpamMiddleware(BaseMiddleware):
             # disable the middleware or affect legitimate gameplay.
             return
 
+    @staticmethod
+    def _chat_from_event(event):
+        chat = getattr(event, "chat", None)
+        if chat is not None:
+            return chat
+        message = getattr(event, "message", None)
+        return getattr(message, "chat", None)
+
+    async def _is_group_admin(self, event, data) -> bool:
+        chat = self._chat_from_event(event)
+        user = getattr(event, "from_user", None)
+        if not chat or chat.type not in {"group", "supergroup"} or not user:
+            return False
+        key = (chat.id, user.id)
+        now = time.monotonic()
+        cached = self._admin_cache.get(key)
+        if cached and now - cached[0] < config.GROUP_RAID_ADMIN_CACHE_SECONDS:
+            return cached[1]
+        bot = data.get("bot")
+        if bot is None:
+            return False
+        try:
+            member = await bot.get_chat_member(chat.id, user.id)
+            allowed = getattr(member, "status", "") in {"creator", "administrator"}
+        except Exception:
+            # A failed admin lookup must fail closed during lockdown.
+            allowed = False
+        self._admin_cache[key] = (now, allowed)
+        return allowed
+
+    async def _group_raid_gate(self, event, data, user_id: int) -> bool:
+        """Return True when the event may continue to a gameplay handler."""
+        chat = self._chat_from_event(event)
+        if not chat or chat.type not in {"group", "supergroup"}:
+            return True
+        now = time.monotonic()
+        chat_id = chat.id
+        if await self._is_group_admin(event, data):
+            return True
+
+        burst = self._chat_burst[chat_id]
+        while burst and now - burst[0][0] > config.GROUP_RAID_WINDOW_SECONDS:
+            burst.popleft()
+        burst.append((now, user_id))
+        unique_users = {uid for _, uid in burst}
+        lockdown_until = self._chat_lockdown_until.get(chat_id, 0.0)
+        if lockdown_until <= now and len(unique_users) >= config.GROUP_RAID_UNIQUE_USERS:
+            lockdown_until = now + config.GROUP_RAID_LOCKDOWN_SECONDS
+            self._chat_lockdown_until[chat_id] = lockdown_until
+
+        if lockdown_until > now:
+            await self._delete_blocked_message(event)
+            return False
+        return True
+
     async def _notify(self, event, remaining: float) -> None:
         user = getattr(event, "from_user", None)
         user_id = getattr(user, "id", None)
@@ -62,6 +120,8 @@ class AntiSpamMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         now = time.monotonic()
+        if not await self._group_raid_gate(event, data, user_id):
+            return
         key = self._event_key(event)
         last_event = self._last_event.get(user_id, 0.0)
         last_key, last_key_at = self._last_key.get(user_id, (None, 0.0))

@@ -1268,6 +1268,48 @@ def is_realistic_war_scenario(text: str) -> bool:
     )
 
 
+def build_anti_raid_context(attacker: dict, defender: dict) -> str:
+    """Pass preparedness to the referee without exposing hidden player moves."""
+    readiness = max(0, min(100, int(defender.get("readiness", 0) or 0)))
+    bases = max(0, int(defender.get("military_bases", 0) or 0))
+    tech = max(0, int(defender.get("tech", 0) or 0))
+    defense_index = readiness + bases * 2 + tech
+    if defense_index >= 80:
+        posture = "высокая готовность: внезапный рейд быстро обнаруживается и получает ограниченный эффект"
+    elif defense_index >= 40:
+        posture = "средняя готовность: часть удара может застать гарнизоны врасплох, но полного разгрома быть не должно"
+    else:
+        posture = "низкая готовность: внезапный рейд получает преимущество, но не может автоматически уничтожить страну"
+    return (
+        f"Анти-рейд: готовность обороны {readiness}/100, военные базы {bases}, технологии {tech}, "
+        f"индекс подготовки {defense_index}. Положение: {posture}. "
+        "Ущерб обычного рейда должен быть поэтапным и ограниченным; не обнуляй страну одним ударом."
+    )
+
+
+@dp.message(Command("raid_status"))
+async def cmd_raid_status(message: Message):
+    """Show the player's current in-game anti-raid posture."""
+    country = await db.get_country(message.from_user.id)
+    if not country:
+        await answer_topic_safe(message, "Сначала создай страну: /founding Название")
+        return
+    readiness = max(0, min(100, int(country.get("readiness", 0) or 0)))
+    bases = int(country.get("military_bases", 0) or 0)
+    tech = int(country.get("tech", 0) or 0)
+    defense_index = readiness + bases * 2 + tech
+    posture = "высокая" if defense_index >= 80 else "средняя" if defense_index >= 40 else "низкая"
+    await answer_topic_safe(
+        message,
+        f"🛡️ <b>Анти-рейд: {esc(country['name'])}</b>\n"
+        f"Готовность: <b>{readiness}/100</b>\n"
+        f"Военные базы: <b>{bases}</b> · технологии: <b>{tech}</b>\n"
+        f"Индекс подготовки: <b>{defense_index}</b> · позиция: <b>{posture}</b>\n\n"
+        "Повышай готовность, строй базы и развивай технологии. Это уменьшает эффект внезапной атаки, "
+        "но не делает страну полностью неуязвимой."
+    )
+
+
 @dp.message(Command("attack"))
 async def cmd_attack(message: Message):
     """/attack user_id описание атаки — война между двумя игроками, вердикт от ИИ"""
@@ -1385,9 +1427,15 @@ async def cmd_defend(message: Message):
     await hide_group_command(message)
     current_year = await db.get_current_year()
     combined_text = f"Атака: {pending['attack_text']}\nОборона: {defense_text}"
+    raid_context = build_anti_raid_context(attacker, defender)
     thinking_msg = await message.answer("⚔️ Ведущий рассматривает действия атакующей и обороняющейся стороны...")
     try:
-        verdict = await ai.get_war_verdict(attacker, defender, combined_text, world_context=f"Текущий год мира: {current_year}.")
+        verdict = await ai.get_war_verdict(
+            attacker,
+            defender,
+            combined_text,
+            world_context=f"Текущий год мира: {current_year}.\n{raid_context}",
+        )
         outcome = verdict.get("outcome", "error")
         if outcome == "error":
             await db.reset_pending_war(war_id)
