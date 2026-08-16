@@ -1471,6 +1471,35 @@ async def cmd_defend(message: Message):
         raise
 
 
+@dp.message(Command("war_history"))
+async def cmd_war_history(message: Message):
+    """Show completed wars involving the player without revealing secret turn text."""
+    country = await db.get_country(message.from_user.id)
+    if not country:
+        await answer_topic_safe(message, "Сначала основи страну: <code>/founding Бразилия</code>")
+        return
+    history = await db.get_war_history(message.from_user.id, 20)
+    if not history:
+        await answer_topic_safe(message, "📚 У твоей страны пока нет завершённых войн.")
+        return
+    lines = [
+        f"📚 <b>Военная история {esc(country['name'])}</b>",
+        "Секретные тексты атаки и обороны здесь не показываются.",
+        "",
+    ]
+    for item in history:
+        if item["attacker_id"] == message.from_user.id:
+            opponent = item["defender_name"]
+            role = "Атака"
+            result = {"attacker_win": "победа", "defender_win": "поражение", "draw": "ничья"}.get(item["outcome"], "завершено")
+        else:
+            opponent = item["attacker_name"]
+            role = "Оборона"
+            result = {"defender_win": "победа", "attacker_win": "поражение", "draw": "ничья"}.get(item["outcome"], "завершено")
+        lines.append(f"• Война #{item['id']} · {role} против <b>{esc(opponent)}</b> · <b>{result}</b>")
+    await answer_topic_safe(message, "\n".join(lines), reply_markup=MAIN_INLINE)
+
+
 @dp.message(Command("wars"))
 async def cmd_wars(message: Message):
     """/wars — ожидающие обороны и последние военные столкновения."""
@@ -2558,6 +2587,7 @@ async def cmd_help(message: Message):
         "<code>/pmc_fund сумма</code> — перевести деньги страны в инвентарь\n"
         "<code>/pmc_recruit количество</code> — набор (КД 6 часов)\n"
         "<code>/pmc_help</code> — подробная инструкция по регистрации и работе ЧВК\n"
+        "<code>/war_history</code> — история завершённых войн своей страны\n"
     )
     if is_admin(message.from_user.id):
         text += "\n<b>🔐 Панель администратора</b>\n<code>/pmc_sanction ID тип причина</code> — санкция ЧВК."

@@ -1188,6 +1188,21 @@ async def get_recent_wars(limit: int = 10):
         return [dict(r) for r in rows]
 
 
+async def get_war_history(user_id: int, limit: int = 20):
+    """Return wars involving one country, newest first, without exposing hidden turn text."""
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT id, attacker_id, attacker_name, defender_id, defender_name,
+                      outcome, verdict_text, created_at
+               FROM wars
+               WHERE attacker_id = ? OR defender_id = ?
+               ORDER BY id DESC LIMIT ?""",
+            (user_id, user_id, limit),
+        )
+        return [dict(row) for row in await cur.fetchall()]
+
+
 # --- Альянсы ---
 
 async def create_alliance(tag: str, name: str) -> bool:
