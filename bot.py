@@ -648,6 +648,29 @@ async def cmd_start(message: Message):
     )
 
 
+@dp.message(F.new_chat_members)
+async def welcome_new_members(message: Message):
+    """Explain the two game paths when users enter a group."""
+    if message.chat.type not in {"group", "supergroup"}:
+        return
+    members = [member for member in (message.new_chat_members or []) if not member.is_bot]
+    if not members:
+        return
+    mentions = ", ".join(
+        f'<a href="tg://user?id={member.id}">{esc(member.full_name)}</a>'
+        for member in members
+    )
+    await message.answer(
+        f"👋 Добро пожаловать, {mentions}!\n\n"
+        "Это <b>ВПИ ГАВАНЬ</b> — геополитическая RP-игра. Здесь можно развивать государство или управлять отдельной ЧВК.\n\n"
+        "<b>🌍 Хочешь играть за страну?</b>\n"
+        "Выбери реальную страну командой: <code>/founding Название</code>.\n\n"
+        "<b>🏴 Хочешь играть за ЧВК?</b>\n"
+        "Страна не нужна. Создай самостоятельную организацию: <code>/pmc_create Название</code>. После регистрации бот сам откроет Центр ЧВК при команде <code>/start</code>.\n\n"
+        "<b>С чего начать:</b> отправь <code>/start</code>, выбери один путь и следуй подсказке «Что делать сейчас». Правила и команды: <code>/help</code>."
+    )
+
+
 _founding_lock = asyncio.Lock()  # общий лок, чтобы два игрока не заняли одну страну одновременно
 
 
@@ -1925,18 +1948,38 @@ async def render_pmc_dashboard(message: Message, owner_id: int | None = None):
     if not pmc:
         text = (
             "🏴 <b>Центр ЧВК</b>\n\n"
-            "ЧВК — самостоятельная организация, отдельная от страны.\n\n"
-            "Создай организацию командой:\n<code>/pmc_create Название</code>\n\n"
-            "После регистрации здесь появятся профиль, бюджет, набор, заказы, операции и новости."
+            "Здесь управляется самостоятельная организация, а не страна. ЧВК имеет собственные деньги, личный состав, репутацию, заказы и операции.\n\n"
+            "<b>Начни так:</b>\n"
+            "1. Создай организацию: <code>/pmc_create Название</code>\n"
+            "2. Открой профиль и проверь стартовый бюджет.\n"
+            "3. После создания используй кнопки ниже — в каждой карточке будет объяснено, что делать дальше.\n\n"
+            "Страна для регистрации ЧВК не нужна."
         )
     else:
         label = "Террористическая организация" if pmc["org_type"] == "terror" else "ЧВК"
+        pending_requests = await db.list_pmc_requests(pmc["id"], 20) if pmc["status"] == "active" else []
+        personnel = int(pmc.get("personnel", 0) or 0)
+        funds = int(pmc.get("inventory_gold", 0) or 0)
+        if pmc["status"] != "active":
+            next_step = "Организация временно недоступна. Обратись к куратору для уточнения статуса."
+        elif pending_requests:
+            next_step = f"📨 У тебя есть необработанные заказы: <b>{len(pending_requests)}</b>. Открой «Заказы» и прими или отклони их."
+        elif personnel <= 0:
+            next_step = "👥 Следующий шаг: набери первый личный состав командой <code>/pmc_recruit 2500</code>."
+        elif personnel < 2500:
+            next_step = "👥 Следующий шаг: доведи первый набор до 2 500 сотрудников, если хватает бюджета."
+        else:
+            next_step = "⚔️ Следующий шаг: подготовь реалистичную операцию через <code>/pmc_action описание</code> или опубликуй новость через <code>/pmc_news текст</code>."
         text = (
             f"🏴 <b>Центр {label}</b>\n\n"
-            f"<b>{esc(pmc['name'])}</b> · статус: <b>{esc(pmc['status'])}</b>\n"
-            f"Репутация: <b>{pmc['reputation']}/100</b> · личный состав: <b>{pmc['personnel']:,}</b>\n"
-            f"Бюджет организации: <b>{pmc['inventory_gold']:,}</b>\n\n"
-            "Выбери действие в меню ниже. Статистика страны и ЧВК не смешивается."
+            f"<b>{esc(pmc['name'])}</b> · ID <code>{pmc['id']}</code>\n"
+            f"Статус: <b>{esc(pmc['status'])}</b> · репутация: <b>{pmc['reputation']}/100</b>\n"
+            f"👥 Личный состав: <b>{personnel:,}</b>\n"
+            f"💰 Бюджет ЧВК: <b>{funds:,}</b>\n"
+            f"📨 Ожидающие заказы: <b>{len(pending_requests)}</b>\n\n"
+            f"🧭 <b>Что делать сейчас</b>\n{next_step}\n\n"
+            "<b>Разделы меню:</b> профиль показывает состояние организации; бюджет и набор развивают ресурсы; заказы дают работу; операция нужна для военного RP; новости формируют публичную историю.\n\n"
+            "Статистика ЧВК и страны хранится отдельно. Для перехода к стране нажми «🌍 Страна»."
         )
     await answer_topic_safe(message, text, reply_markup=PMC_INLINE, owner_id=owner_id)
 
