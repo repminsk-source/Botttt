@@ -465,6 +465,7 @@ async def format_country(c: dict) -> str:
         f"🔬 Технологии: {c['tech']}\n"
         f"🤝 Дипломатия: {c['diplomacy']}\n"
         f"🏛️ Национальный курс: {config.POLICY_DEFINITIONS.get(c.get('policy', 'development'), config.POLICY_DEFINITIONS['development'])['name']}\n"
+        f"⚙️ Приоритет производства: { {'civilian': 'гражданский', 'balanced': 'сбалансированный', 'military': 'военный'}.get(c.get('labor_focus', 'balanced'), 'сбалансированный') }\n"
         f"🛡️ Стабильность: {c['stability']} / 100\n"
         f"🚨 Готовность армии: {c['readiness']} / 100\n"
         f"📉 Военная усталость: {c['war_exhaustion']} / 100\n"
@@ -681,6 +682,31 @@ async def cmd_policy(message: Message):
         await answer_topic_safe(message, "Политику можно менять не чаще одного раза в 30 минут.")
         return
     await answer_topic_safe(message, f"🏛️ Новый национальный курс: <b>{policy['name']}</b>\n{policy['description']}")
+
+
+@dp.message(Command("priority"))
+async def cmd_priority(message: Message):
+    country = await db.get_country(message.from_user.id)
+    if not country:
+        await answer_topic_safe(message, "Сначала основи страну: <code>/founding Бразилия</code>")
+        return
+    labels = {
+        "civilian": "Гражданское производство (+15% денег, ресурсов, еды и воды; −15% резерва)",
+        "balanced": "Сбалансированный режим (без модификаторов)",
+        "military": "Военная подготовка (+25% резерва; −5% остальных доходов)",
+    }
+    parts = message.text.split()
+    if len(parts) == 1:
+        current = country.get("labor_focus", "balanced")
+        await answer_topic_safe(message, f"⚙️ <b>Приоритет населения</b>\nТекущий режим: <b>{labels[current]}</b>\n\nВыбери: <code>/priority civilian</code>, <code>/priority balanced</code> или <code>/priority military</code>. Режим влияет на следующий сбор и не ограничивает общий размер населения.")
+        return
+    focus = parts[1].lower()
+    if focus not in labels:
+        await answer_topic_safe(message, "Неизвестный режим. Используй <code>/priority</code>.")
+        return
+    async with get_user_lock(message.from_user.id):
+        changed = await db.set_labor_focus(message.from_user.id, focus)
+    await answer_topic_safe(message, f"⚙️ Приоритет изменён: <b>{labels[focus]}</b>" if changed else "Не удалось изменить приоритет.")
 
 
 @dp.message(Command("history"))
@@ -932,6 +958,11 @@ async def cmd_collect(message: Message):
         policy = config.POLICY_DEFINITIONS.get(country.get("policy", "development"), config.POLICY_DEFINITIONS["development"])
         policy_multiplier = policy["production_multiplier"]
         gains = {resource: max(1, int(amount * policy_multiplier)) for resource, amount in gains.items()}
+        labor_focus = country.get("labor_focus", "balanced")
+        if labor_focus == "civilian":
+            gains = {resource: max(1, int(amount * (1.15 if resource in {"gold", "resources", "food", "water"} else 0.85))) for resource, amount in gains.items()}
+        elif labor_focus == "military":
+            gains = {resource: max(1, int(amount * (1.25 if resource == "manpower" else 0.95))) for resource, amount in gains.items()}
         premium_items = await db.get_premium_items(message.from_user.id)
         luck_boost_used = premium_items.get("luck_boost", 0) > 0
         if luck_boost_used:
@@ -2691,6 +2722,7 @@ async def cmd_help(message: Message):
         "<code>/pact_offer ID тип дни условия</code> — предложить дипломатический пакт\n"
         "<code>/pacts</code> — свои предложения и действующие пакты\n"
         "<code>/pact_accept ID</code> / <code>/pact_reject ID</code> — ответить на предложение\n"
+        "<code>/priority</code> — приоритет гражданского производства или армии\n"
     )
     if is_admin(message.from_user.id):
         text += "\n<b>🔐 Панель администратора</b>\n<code>/pmc_sanction ID тип причина</code> — санкция ЧВК."

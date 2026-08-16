@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS countries (
     war_exhaustion INTEGER NOT NULL DEFAULT 0,
     reputation INTEGER NOT NULL DEFAULT 50,
     policy TEXT NOT NULL DEFAULT 'development',
+    labor_focus TEXT NOT NULL DEFAULT 'balanced',
     last_policy_at INTEGER NOT NULL DEFAULT 0,
     points INTEGER NOT NULL DEFAULT 0,
     gold INTEGER NOT NULL DEFAULT 0,
@@ -274,6 +275,7 @@ MIGRATIONS = [
     "ALTER TABLE countries ADD COLUMN war_exhaustion INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE countries ADD COLUMN reputation INTEGER NOT NULL DEFAULT 50",
     "ALTER TABLE countries ADD COLUMN policy TEXT NOT NULL DEFAULT 'development'",
+    "ALTER TABLE countries ADD COLUMN labor_focus TEXT NOT NULL DEFAULT 'balanced'",
     "ALTER TABLE countries ADD COLUMN last_policy_at INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE countries ADD COLUMN gold INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE countries ADD COLUMN resources INTEGER NOT NULL DEFAULT 0",
@@ -405,6 +407,15 @@ async def create_country(user_id: int, chat_id: int, name: str, territory_tier: 
                 (profile or {}).get("gdp_per_capita_usd"), (profile or {}).get("life_expectancy"),
             ),
         )
+        await db.commit()
+        return cur.rowcount == 1
+
+
+async def set_labor_focus(user_id: int, focus: str) -> bool:
+    if focus not in {"civilian", "balanced", "military"}:
+        raise ValueError(f"Недопустимый приоритет труда: {focus!r}")
+    async with _connect() as db:
+        cur = await db.execute("UPDATE countries SET labor_focus = ? WHERE user_id = ?", (focus, user_id))
         await db.commit()
         return cur.rowcount == 1
 
