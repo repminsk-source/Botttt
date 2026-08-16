@@ -202,7 +202,15 @@ async def _call_ollama(system_prompt: str, user_prompt: str) -> str:
     }
     async with httpx.AsyncClient(timeout=120) as client:
         response = await client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = re.sub(r"(?i)(bearer\\s+)[^\\s'\"]+", r"\\1[REDACTED]", response.text or "")
+            detail = re.sub(r"(?i)(api[_-]?key|token)\\s*[:=]\\s*[^,\\s}]+", r"\\1=[REDACTED]", detail)
+            detail = " ".join(detail.split())[:500] or "пустое тело ответа"
+            raise RuntimeError(
+                f"Ollama HTTP {response.status_code} для модели {OLLAMA_MODEL}: {detail}"
+            ) from exc
         data = response.json()
         return data["choices"][0]["message"]["content"]
 
