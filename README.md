@@ -12,7 +12,7 @@ cp .env.example .env
 python bot.py
 ```
 
-В `.env` обязательны `BOT_TOKEN`, `ADMIN_IDS` и `OLLAMA_API_KEY`, если используется Ollama Cloud. Основной режим по умолчанию — `AI_PROVIDER=ollama`, модель — `qwen3.5:cloud` (Qwen 3.5 Cloud), адрес — `https://ollama.com/v1`. Qwen 3.5 Cloud выбран для более сильной работы с русским текстом и структурированными JSON-вердиктами; при необходимости модель можно изменить через `OLLAMA_MODEL`.
+В `.env` обязательны `BOT_TOKEN`, `ADMIN_IDS` и `OLLAMA_API_KEY`, если используется Ollama Cloud. Основной режим по умолчанию — `AI_PROVIDER=ollama`, модель — `gpt-oss:20b-cloud`, адрес — `https://ollama.com/v1`. Qwen 3.5 Cloud (`qwen3.5:cloud`) можно указать вручную через `OLLAMA_MODEL`, но Ollama требует для неё подходящую подписку; без неё API возвращает HTTP 403.
 
 ## Игровой цикл
 

@@ -57,7 +57,7 @@ services:
       - key: OLLAMA_BASE_URL
         value: "https://ollama.com/v1"
       - key: OLLAMA_MODEL
-        value: "qwen3.5:cloud"
+        value: "gpt-oss:20b-cloud"
       - key: OLLAMA_API_KEY
         sync: false
     # SQLite on Render Free is not persistent across restarts or redeploys.

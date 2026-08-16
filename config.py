@@ -33,7 +33,7 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 # Для локального Ollama эти значения можно переопределить через Environment Variables.
 OLLAMA_ENABLED = os.getenv("OLLAMA_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "https://ollama.com/v1")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:cloud")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gpt-oss:20b-cloud")
 OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "")
 # Provider mode: ollama = Ollama only, fallback = Ollama then remote fallbacks.
 AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama").strip().lower()
