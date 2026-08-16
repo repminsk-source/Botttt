@@ -23,7 +23,9 @@ def test_command_handlers_are_unique_and_present():
         "cmd_alliance_join", "cmd_alliance_leave", "cmd_alliance_info", "cmd_trade",
         "cmd_trade_offer", "cmd_trade_accept", "cmd_trade_reject", "cmd_world", "cmd_help",
         "cmd_set_year", "cmd_seed_alliances", "cmd_give_points", "cmd_set_stat", "cmd_kick",
-        "cmd_transfer", "cmd_premium", "cmd_premium_grant",
+        "cmd_transfer", "cmd_premium", "cmd_premium_grant", "cmd_raid_status", "cmd_world_event",
+        "cmd_pmc_create", "cmd_pmc_help", "cmd_pmc_profile", "cmd_pmc_list", "cmd_pmc_request",
+        "cmd_pmc_requests", "cmd_pmc_accept", "cmd_pmc_reject", "cmd_pmc_fund", "cmd_pmc_recruit", "cmd_pmc_sanction",
     }
     assert required.issubset(set(callbacks))
 
