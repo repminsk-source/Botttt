@@ -962,7 +962,7 @@ async def delete_country(user_id: int) -> bool:
         return cur.rowcount > 0
 
 
-async def transfer_country(old_user_id: int, new_user_id: int, new_chat_id: int = None) -> bool:
+async def transfer_country(old_user_id: int, new_user_id: int, new_chat_id: int | None = None) -> bool:
     """
     Передаёт страну от одного telegram-пользователя другому. Возвращает True при успехе.
     Если у нового user_id уже есть своя страна — операция отклоняется (False).

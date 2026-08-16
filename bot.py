@@ -341,6 +341,18 @@ def cooldown_text(label: str, remaining: int) -> str:
     return f"⏳ {label}: ещё {minutes} мин {seconds} сек."
 
 
+def format_duration(seconds: int) -> str:
+    """Format a remaining cooldown consistently in compact Russian text."""
+    total = max(0, int(seconds))
+    hours, rest = divmod(total, 3600)
+    minutes, seconds = divmod(rest, 60)
+    if hours:
+        return f"{hours} ч {minutes} мин {seconds} сек"
+    if minutes:
+        return f"{minutes} мин {seconds} сек"
+    return f"{seconds} сек"
+
+
 def energy_balance(buildings: dict | None = None, population: int = 0) -> tuple[int, int]:
     buildings = buildings or {}
     supply = 0
@@ -518,7 +530,7 @@ async def format_country(c: dict) -> str:
                 continue
             text += f"{info['emoji']} {info['name']}: ур. {level}\n"
     progress = progression_snapshot(c, buildings)
-    stage_score, stage_name, stage_goal = progress["stage"]
+    _, stage_name, stage_goal = progress["stage"]
     text += (
         f"\n<b>📈 Развитие страны</b>\n"
         f"Этап: <b>{esc(stage_name)}</b>\n"
@@ -532,7 +544,7 @@ async def format_country(c: dict) -> str:
         text += "🎁 Следующая ключевая цель: первый сбор даст одноразовый бонус +14 000 000 денег.\n"
 
     if progress["next_stage"]:
-        target, next_name, next_goal = progress["next_stage"]
+        target, next_name, _ = progress["next_stage"]
         text += f"До этапа «{esc(next_name)}»: ещё <b>{target - progress['score']}</b> очков.\n"
     else:
         text += "Достигнут максимальный этап текущей шкалы.\n"
@@ -811,9 +823,10 @@ async def cmd_progress(message: Message):
         f"📈 <b>Прогресс {esc(country['name'])}</b>",
         f"Этап: <b>{esc(stage_name)}</b> · очки: <b>{progress['score']}</b>",
         f"Цель: <b>{esc(stage_goal)}</b>",
+        f"Реальное население: <b>{esc(real_population_text)}</b> · предел армии: <b>{esc(army_limit_text)}</b>",
     ]
     if progress["next_stage"]:
-        target, next_name, next_goal = progress["next_stage"]
+        target, next_name, _ = progress["next_stage"]
         lines.append(f"До «{esc(next_name)}»: <b>{target - progress['score']}</b> очков")
     else:
         lines.append("Верхний этап достигнут — развивай влияние через мир и войну.")
@@ -1448,8 +1461,6 @@ async def cmd_attack(message: Message):
             "<code>/set_year год</code>, прежде чем атаки станут доступны."
         )
         return
-    world_context = f"Текущий год мира: {current_year}."
-
     # Блокировки берём в фиксированном порядке (по возрастанию user_id) вне зависимости
     # от того, кто атакующий — иначе две одновременные встречные атаки могут взаимно
     # заблокироваться (deadlock), ожидая лок друг друга в обратном порядке.
@@ -1881,7 +1892,7 @@ async def menu_army(message: Message):
         f"⚔️ <b>Армия {esc(country['name'])}</b>\n\n"
         f"Сила: <b>{country['military']:,}/{base_capacity:,}</b> · свободно <b>{free_capacity:,}</b>\n"
         f"Базы: <b>{country['military_bases']}</b> · резерв: <b>{country['manpower']:,}</b>\n"
-        f"Деньги: <b>{country['gold']:,}</b> · население: <b>{country['population']:,}</b>\n\n"
+        f"Деньги: <b>{country['gold']:,}</b> · население: <b>{country['population']:,}</b>{esc(demographic_text)}\n\n"
         "Выбери одно действие ниже.",
         reply_markup=ARMY_INLINE,
     )
