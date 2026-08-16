@@ -81,7 +81,24 @@ async def test_explicit_fallback_order():
         ai._call_ollama, ai._call_grok = old_ollama, old_grok
 
 
+async def test_cloud_requires_api_key():
+    old_enabled, old_base, old_key = ai.OLLAMA_ENABLED, ai.OLLAMA_BASE_URL, ai.OLLAMA_API_KEY
+    ai.OLLAMA_ENABLED = True
+    ai.OLLAMA_BASE_URL = "https://ollama.com/v1"
+    ai.OLLAMA_API_KEY = ""
+    try:
+        try:
+            await ai._call_ollama("system", "user")
+        except RuntimeError as exc:
+            assert "OLLAMA_API_KEY" in str(exc)
+        else:
+            raise AssertionError("missing cloud key was not rejected")
+    finally:
+        ai.OLLAMA_ENABLED, ai.OLLAMA_BASE_URL, ai.OLLAMA_API_KEY = old_enabled, old_base, old_key
+
+
 if __name__ == "__main__":
+    asyncio.run(test_cloud_requires_api_key())
     asyncio.run(test_ollama_primary_only())
     asyncio.run(test_explicit_fallback_order())
     asyncio.run(test_parser_repairs_common_model_wrappers())

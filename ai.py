@@ -183,8 +183,11 @@ async def _call_ollama(system_prompt: str, user_prompt: str) -> str:
     if not OLLAMA_ENABLED:
         raise RuntimeError("OLLAMA_ENABLED не включён")
     url = OLLAMA_BASE_URL.rstrip("/") + "/chat/completions"
+    is_cloud = "ollama.com" in OLLAMA_BASE_URL.casefold()
+    if is_cloud and not OLLAMA_API_KEY.strip():
+        raise RuntimeError("OLLAMA_API_KEY не задан для Ollama Cloud; добавь API-ключ в Render Environment")
     headers = {
-        "Authorization": f"Bearer {OLLAMA_API_KEY or 'ollama-local'}",
+        "Authorization": f"Bearer {OLLAMA_API_KEY if OLLAMA_API_KEY else 'ollama-local'}",
         "Content-Type": "application/json",
     }
     payload = {
