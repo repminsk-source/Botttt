@@ -18,6 +18,10 @@ async def main():
         profile2 = {"iso_code": "BBB", "real_population": 1_000_000, "real_gdp_usd": 1_000_000}
         assert await db.create_country(1002, 2, "Бета", "medium", profile2)
         assert await db.create_country(1003, 3, "Гамма", "medium", {"iso_code": "CCC", "real_population": 1_000_000})
+        standalone_id = await db.create_pmc(9000, "Свободный Щит", "pmc", 100)
+        assert standalone_id
+        standalone = await db.get_pmc(standalone_id)
+        assert standalone["inventory_gold"] == config.PMC_STARTING_FUNDS
 
         pmc_id = await db.create_pmc(1001, "Щит", "pmc", 100)
         assert pmc_id
@@ -46,7 +50,7 @@ async def main():
         pmc_row = await db.get_pmc(pmc_id)
         assert await db.fund_pmc(pmc_id, 1001, 100_000, 100)
         funded = await db.get_pmc(pmc_id)
-        assert funded["inventory_gold"] == 100_000
+        assert funded["inventory_gold"] == config.PMC_STARTING_FUNDS + 100_000
         ok, reason = await db.recruit_pmc(pmc_id, 1001, 2500, 100)
         assert ok, reason
         ok2, why = await db.recruit_pmc(pmc_id, 1001, 2500, 101)

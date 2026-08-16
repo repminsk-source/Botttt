@@ -22,6 +22,7 @@ from config import (
     START_MILITARY_BASES,
     START_FOOD,
     SECONDS_PER_GAME_YEAR,
+    PMC_STARTING_FUNDS,
 )
 
 SCHEMA = """
@@ -1439,8 +1440,8 @@ async def create_pmc(owner_id: int, name: str, org_type: str = "pmc", timestamp:
             return None
         try:
             cur = await conn.execute(
-                "INSERT INTO pmcs (owner_id, name, org_type, created_at) VALUES (?, ?, ?, ?)",
-                (owner_id, name, org_type, timestamp),
+                "INSERT INTO pmcs (owner_id, name, org_type, inventory_gold, created_at) VALUES (?, ?, ?, ?, ?)",
+                (owner_id, name, org_type, PMC_STARTING_FUNDS, timestamp),
             )
         except aiosqlite.IntegrityError:
             await conn.rollback()

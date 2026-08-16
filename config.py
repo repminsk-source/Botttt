@@ -159,6 +159,7 @@ PMC_MAX_PERSONNEL = _env_int("PMC_MAX_PERSONNEL", 250000, minimum=1)
 PMC_RECRUIT_COOLDOWN_SECONDS = _env_int("PMC_RECRUIT_COOLDOWN_SECONDS", 6 * 60 * 60, minimum=1)
 PMC_MAX_PER_COUNTRY = _env_int("PMC_MAX_PER_COUNTRY", 2, minimum=1)
 PMC_RECRUIT_COST_PER_PERSON = _env_int("PMC_RECRUIT_COST_PER_PERSON", 20, minimum=0)
+PMC_STARTING_FUNDS = _env_int("PMC_STARTING_FUNDS", 50_000, minimum=0)
 
 # Кулдаун между /action у одного игрока, в секундах (0 = выключен)
 ACTION_COOLDOWN_SECONDS = _env_int("ACTION_COOLDOWN_SECONDS", 10 * 60)
