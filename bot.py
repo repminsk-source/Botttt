@@ -341,6 +341,29 @@ def cooldown_text(label: str, remaining: int) -> str:
     return f"⏳ {label}: ещё {minutes} мин {seconds} сек."
 
 
+def energy_balance(buildings: dict | None = None, population: int = 0) -> tuple[int, int]:
+    buildings = buildings or {}
+    supply = 0
+    demand = max(0, int(population) // 100)
+    for b_type, level in buildings.items():
+        info = ALL_BUILDINGS.get(b_type)
+        if not info or int(level) <= 0:
+            continue
+        if info["produces"] == "energy":
+            supply += int(level) * info["amount_per_level"]
+        elif info["produces"] in {"resources", "wood", "iron", "coal", "oil", "uranium"}:
+            demand += int(level) * 100
+    return supply, demand
+
+
+def economic_level_name(economy: int) -> str:
+    current = config.ECONOMIC_LEVELS[0][1]
+    for threshold, label in config.ECONOMIC_LEVELS:
+        if economy >= threshold:
+            current = label
+    return current
+
+
 def production_preview(buildings: dict | None = None) -> dict:
     gains = {info["produces"]: 0 for info in ALL_BUILDINGS.values()}
     for b_type, level in (buildings or {}).items():
@@ -466,6 +489,7 @@ async def format_country(c: dict) -> str:
         f"🤝 Дипломатия: {c['diplomacy']}\n"
         f"🏛️ Национальный курс: {config.POLICY_DEFINITIONS.get(c.get('policy', 'development'), config.POLICY_DEFINITIONS['development'])['name']}\n"
         f"⚙️ Приоритет производства: { {'civilian': 'гражданский', 'balanced': 'сбалансированный', 'military': 'военный'}.get(c.get('labor_focus', 'balanced'), 'сбалансированный') }\n"
+        f"💹 Экономический уровень: {economic_level_name(c['economy'])} · налог: {c.get('tax_rate', config.TAX_RATE_DEFAULT)}%\n"
         f"🛡️ Стабильность: {c['stability']} / 100\n"
         f"🚨 Готовность армии: {c['readiness']} / 100\n"
         f"📉 Военная усталость: {c['war_exhaustion']} / 100\n"
@@ -707,6 +731,24 @@ async def cmd_priority(message: Message):
     async with get_user_lock(message.from_user.id):
         changed = await db.set_labor_focus(message.from_user.id, focus)
     await answer_topic_safe(message, f"⚙️ Приоритет изменён: <b>{labels[focus]}</b>" if changed else "Не удалось изменить приоритет.")
+
+
+@dp.message(Command("tax"))
+async def cmd_tax(message: Message):
+    country = await db.get_country(message.from_user.id)
+    if not country:
+        await answer_topic_safe(message, "Сначала основи страну: <code>/founding Бразилия</code>")
+        return
+    parts = message.text.split()
+    if len(parts) == 1:
+        await answer_topic_safe(message, f"🏛️ Налоговая ставка: <b>{country.get('tax_rate', config.TAX_RATE_DEFAULT)}%</b>\nДопустимый диапазон: {config.TAX_RATE_MIN}–{config.TAX_RATE_MAX}%. Налоги начисляются при <code>/collect</code> и зависят от игрового населения.")
+        return
+    if len(parts) != 2 or not parts[1].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/tax 1–30</code>")
+        return
+    rate = int(parts[1])
+    changed = await db.set_tax_rate(message.from_user.id, rate)
+    await answer_topic_safe(message, f"🏛️ Налоговая ставка изменена на <b>{rate}%</b>." if changed else f"Ставка должна быть от {config.TAX_RATE_MIN}% до {config.TAX_RATE_MAX}%.")
 
 
 @dp.message(Command("history"))
@@ -955,6 +997,11 @@ async def cmd_collect(message: Message):
         is_first_collect = int(country.get("last_collect_at", 0) or 0) == 0
         buildings = await db.get_buildings(message.from_user.id)
         gains = production_preview(buildings)
+        housing_population = gains.pop("population", 0)
+        energy_supply, energy_demand = energy_balance(buildings, country.get("population", 0))
+        energy_shortage = energy_demand > energy_supply
+        if "energy" in gains:
+            gains.pop("energy", None)
         policy = config.POLICY_DEFINITIONS.get(country.get("policy", "development"), config.POLICY_DEFINITIONS["development"])
         policy_multiplier = policy["production_multiplier"]
         gains = {resource: max(1, int(amount * policy_multiplier)) for resource, amount in gains.items()}
@@ -965,6 +1012,11 @@ async def cmd_collect(message: Message):
             gains = {resource: max(1, int(amount * (0.75 ** economic_sanctions))) if resource in {"gold", "resources"} else amount for resource, amount in gains.items()}
         if trade_sanctions:
             gains = {resource: max(1, int(amount * (0.80 ** trade_sanctions))) if resource in {"wood", "iron", "coal", "oil", "uranium", "resources"} else amount for resource, amount in gains.items()}
+        if energy_shortage:
+            gains = {resource: max(1, int(amount * config.ENERGY_SHORTAGE_MULTIPLIER)) if resource in {"resources", "wood", "iron", "coal", "oil", "uranium"} else amount for resource, amount in gains.items()}
+        tax_gain = min(500_000, int(country.get("population", 0) * config.TAX_PER_POPULATION * country.get("tax_rate", config.TAX_RATE_DEFAULT) / 10))
+        if tax_gain > 0:
+            gains["gold"] = gains.get("gold", 0) + tax_gain
         labor_focus = country.get("labor_focus", "balanced")
         if labor_focus == "civilian":
             gains = {resource: max(1, int(amount * (1.15 if resource in {"gold", "resources", "food", "water"} else 0.85))) for resource, amount in gains.items()}
@@ -990,16 +1042,15 @@ async def cmd_collect(message: Message):
         # не просто ещё одним числом, а ресурсом с игровым эффектом.
         # Рост определяется накопленной едой; территориального потолка населения нет.
         population_growth = 0
+        food_population_growth = 0
         food_spend = 0
         current_food = country["food"] + gains.get("food", 0)
         if current_food >= config.FOOD_GROWTH_THRESHOLD:
             possible_growth = current_food // config.FOOD_GROWTH_THRESHOLD
             # Население не ограничивается территориальным потолком; рост зависит от еды.
-            population_growth = min(possible_growth, config.MAX_POPULATION_GROWTH_PER_COLLECT)
-            if population_growth > 0:
-                food_spend = population_growth * config.FOOD_GROWTH_THRESHOLD
-            else:
-                food_spend = 0
+            food_population_growth = min(possible_growth, config.MAX_POPULATION_GROWTH_PER_COLLECT)
+            food_spend = food_population_growth * config.FOOD_GROWTH_THRESHOLD
+        population_growth = food_population_growth + max(0, int(housing_population))
 
         stability_delta = policy["stability_delta"]
         if current_food >= config.FOOD_GROWTH_THRESHOLD * 2 and country["water"] >= 100:
@@ -1036,6 +1087,12 @@ async def cmd_collect(message: Message):
         lines.append("⚡ Буст удачи применён: этот сбор увеличен на 25%.")
     if active_sanctions:
         lines.append(f"⚠️ Активные санкции: {len(active_sanctions)}. Экономические и торговые доходы снижены.")
+    if tax_gain > 0:
+        lines.append(f"🏛️ Налоги населения: +{tax_gain:,} денег при ставке {country.get('tax_rate', config.TAX_RATE_DEFAULT)}%.")
+    if housing_population > 0:
+        lines.append(f"🏡 Жильё: +{housing_population:,} населения.")
+    if energy_shortage:
+        lines.append(f"⚡ Дефицит энергии: добыча снижена до {int(config.ENERGY_SHORTAGE_MULTIPLIER * 100)}%.")
     if economy_growth > 0:
         lines.append(f"💰 Экономика: +{economy_growth} (от развития построек)")
     if population_growth > 0:
@@ -2760,6 +2817,7 @@ async def cmd_help(message: Message):
         "<code>/sanction ID тип дни причина</code> — наложить санкции на страну\n"
         "<code>/sanctions</code> — действующие и недавние санкции\n"
         "<code>/priority</code> — приоритет гражданского производства или армии\n"
+        "<code>/tax</code> — налоговая ставка и налоги населения\n"
     )
     if is_admin(message.from_user.id):
         text += "\n<b>🔐 Панель администратора</b>\n<code>/pmc_sanction ID тип причина</code> — санкция ЧВК."

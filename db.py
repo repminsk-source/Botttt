@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS countries (
     reputation INTEGER NOT NULL DEFAULT 50,
     policy TEXT NOT NULL DEFAULT 'development',
     labor_focus TEXT NOT NULL DEFAULT 'balanced',
+    tax_rate INTEGER NOT NULL DEFAULT 10,
     last_policy_at INTEGER NOT NULL DEFAULT 0,
     points INTEGER NOT NULL DEFAULT 0,
     gold INTEGER NOT NULL DEFAULT 0,
@@ -291,6 +292,7 @@ MIGRATIONS = [
     "ALTER TABLE countries ADD COLUMN reputation INTEGER NOT NULL DEFAULT 50",
     "ALTER TABLE countries ADD COLUMN policy TEXT NOT NULL DEFAULT 'development'",
     "ALTER TABLE countries ADD COLUMN labor_focus TEXT NOT NULL DEFAULT 'balanced'",
+    "ALTER TABLE countries ADD COLUMN tax_rate INTEGER NOT NULL DEFAULT 10",
     "ALTER TABLE countries ADD COLUMN last_policy_at INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE countries ADD COLUMN gold INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE countries ADD COLUMN resources INTEGER NOT NULL DEFAULT 0",
@@ -422,6 +424,16 @@ async def create_country(user_id: int, chat_id: int, name: str, territory_tier: 
                 (profile or {}).get("gdp_per_capita_usd"), (profile or {}).get("life_expectancy"),
             ),
         )
+        await db.commit()
+        return cur.rowcount == 1
+
+
+async def set_tax_rate(user_id: int, tax_rate: int) -> bool:
+    from config import TAX_RATE_MIN, TAX_RATE_MAX
+    if tax_rate < TAX_RATE_MIN or tax_rate > TAX_RATE_MAX:
+        return False
+    async with _connect() as db:
+        cur = await db.execute("UPDATE countries SET tax_rate = ? WHERE user_id = ?", (tax_rate, user_id))
         await db.commit()
         return cur.rowcount == 1
 

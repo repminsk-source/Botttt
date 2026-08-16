@@ -160,6 +160,12 @@ PMC_RECRUIT_COOLDOWN_SECONDS = _env_int("PMC_RECRUIT_COOLDOWN_SECONDS", 6 * 60 *
 PMC_MAX_PER_COUNTRY = _env_int("PMC_MAX_PER_COUNTRY", 2, minimum=1)
 PMC_RECRUIT_COST_PER_PERSON = _env_int("PMC_RECRUIT_COST_PER_PERSON", 20, minimum=0)
 PMC_STARTING_FUNDS = _env_int("PMC_STARTING_FUNDS", 50_000, minimum=0)
+TAX_RATE_DEFAULT = _env_int("TAX_RATE_DEFAULT", 10, minimum=1)
+TAX_RATE_MIN = 1
+TAX_RATE_MAX = 30
+TAX_PER_POPULATION = _env_int("TAX_PER_POPULATION", 1, minimum=0)
+ENERGY_SHORTAGE_MULTIPLIER = _env_float("ENERGY_SHORTAGE_MULTIPLIER", 0.50, minimum=0.1)
+ECONOMIC_LEVELS = ((0, "Базовая"), (25, "Развивающаяся"), (75, "Стабильная"), (150, "Крепкая"), (300, "Сильная"))
 
 # Кулдаун между /action у одного игрока, в секундах (0 = выключен)
 ACTION_COOLDOWN_SECONDS = _env_int("ACTION_COOLDOWN_SECONDS", 10 * 60)
@@ -224,6 +230,69 @@ BUILDINGS = {
         "amount_per_level": 750,
         "cost_gold": 350,
         "cost_resources": 250,
+    },
+    "housing_low": {
+        "name": "Малоэтажная застройка",
+        "emoji": "🏡",
+        "produces": "population",
+        "produces_name": "население",
+        "amount_per_level": 25,
+        "cost_gold": 600,
+        "cost_resources": 400,
+    },
+    "housing_mid": {
+        "name": "Среднеэтажная застройка",
+        "emoji": "🏛️",
+        "produces": "population",
+        "produces_name": "население",
+        "amount_per_level": 60,
+        "cost_gold": 1400,
+        "cost_resources": 900,
+    },
+    "housing_high": {
+        "name": "Многоэтажная застройка",
+        "emoji": "🏙️",
+        "produces": "population",
+        "produces_name": "население",
+        "amount_per_level": 150,
+        "cost_gold": 3500,
+        "cost_resources": 2200,
+    },
+    "housing_sky": {
+        "name": "Небоскрёб",
+        "emoji": "🌃",
+        "produces": "population",
+        "produces_name": "население",
+        "amount_per_level": 350,
+        "cost_gold": 9000,
+        "cost_resources": 6000,
+    },
+    "wind_power": {
+        "name": "Ветряная электростанция",
+        "emoji": "🌬️",
+        "produces": "energy",
+        "produces_name": "энергия",
+        "amount_per_level": 500,
+        "cost_gold": 1200,
+        "cost_resources": 800,
+    },
+    "thermal_power": {
+        "name": "Тепловая электростанция",
+        "emoji": "🏭",
+        "produces": "energy",
+        "produces_name": "энергия",
+        "amount_per_level": 1800,
+        "cost_gold": 5000,
+        "cost_resources": 3000,
+    },
+    "nuclear_power": {
+        "name": "Ядерная электростанция",
+        "emoji": "⚛️",
+        "produces": "energy",
+        "produces_name": "энергия",
+        "amount_per_level": 6000,
+        "cost_gold": 20000,
+        "cost_resources": 12000,
     },
 }
 
