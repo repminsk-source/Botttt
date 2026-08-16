@@ -199,7 +199,8 @@ MORE_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📰 Новости"), KeyboardButton(text="🌍 Рейтинг")],
         [KeyboardButton(text="🏛️ Политика"), KeyboardButton(text="🤝 Дипломатия")],
-        [KeyboardButton(text="📖 Помощь"), KeyboardButton(text="⬅️ Назад")],
+        [KeyboardButton(text="🏴 ЧВК"), KeyboardButton(text="📖 Помощь")],
+        [KeyboardButton(text="⬅️ Назад")],
     ],
     resize_keyboard=True,
     is_persistent=True,
@@ -1723,9 +1724,14 @@ async def menu_army(message: Message):
 async def menu_more(message: Message):
     await answer_topic_safe(
         message,
-        "<b>Ещё разделы</b>\nНовости, рейтинг, политика, дипломатия и помощь.",
+        "<b>Ещё разделы</b>\nНовости, рейтинг, политика, дипломатия, ЧВК и помощь.",
         reply_markup=MORE_INLINE,
     )
+
+
+@dp.message(F.text == "🏴 ЧВК")
+async def menu_pmc(message: Message):
+    await cmd_pmc_help(message)
 
 
 @dp.callback_query(F.data == "ui:more")
