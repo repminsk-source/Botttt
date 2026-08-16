@@ -22,7 +22,7 @@ services:
       - key: ACTION_COOLDOWN_SECONDS
         value: "600"
       - key: ATTACK_COOLDOWN_SECONDS
-        value: "3600"
+        value: "600"
       - key: COLLECT_COOLDOWN_SECONDS
         value: "2700"
       - key: BUILD_COOLDOWN_SECONDS
