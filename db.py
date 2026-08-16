@@ -110,6 +110,17 @@ CREATE TABLE IF NOT EXISTS world_events (
     expires_at INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS country_statements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    country_name TEXT NOT NULL,
+    statement TEXT NOT NULL,
+    game_year INTEGER,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_country_statements_created ON country_statements(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS trade_contracts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     proposer_id INTEGER NOT NULL,
@@ -560,6 +571,30 @@ async def get_recent_events_for_user(user_id: int, limit: int = 10):
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM events WHERE user_id = ? ORDER BY id DESC LIMIT ?", (user_id, limit))
         return [dict(r) for r in await cur.fetchall()]
+
+
+async def create_country_statement(user_id: int, country_name: str, statement: str, game_year: int | None = None, timestamp: int | None = None):
+    statement = " ".join(str(statement or "").split())[:1200]
+    country_name = " ".join(str(country_name or "").split())[:120]
+    if not country_name or not statement or len(statement) < 50:
+        return None
+    async with _connect() as db:
+        cur = await db.execute(
+            "INSERT INTO country_statements (user_id, country_name, statement, game_year, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, country_name, statement, game_year, int(timestamp or time.time())),
+        )
+        await db.commit()
+        return int(cur.lastrowid)
+
+
+async def get_recent_country_statements(limit: int = 12):
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT id, user_id, country_name, statement, game_year, created_at FROM country_statements ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(row) for row in await cur.fetchall()]
 
 
 async def create_world_event(title: str, description: str, event_type: str = "world", game_year: int | None = None, effects: dict | None = None, expires_at: int | None = None) -> int:

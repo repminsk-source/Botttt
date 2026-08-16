@@ -1655,6 +1655,46 @@ async def cmd_news(message: Message):
     await answer_topic_safe(message, "\n\n".join(lines), reply_markup=MORE_INLINE)
 
 
+@dp.message(Command("statement"))
+async def cmd_statement(message: Message):
+    """Publish a country statement to the public world feed."""
+    country = await db.get_country(message.from_user.id)
+    if not country:
+        await answer_topic_safe(message, "Сначала основи страну: <code>/founding Бразилия</code>")
+        return
+    statement = command_payload(message)
+    if len(statement) < config.MIN_NARRATIVE_LEN:
+        await answer_topic_safe(message, f"Заявление должно содержать минимум {config.MIN_NARRATIVE_LEN} символов: позицию страны, цель или решение.")
+        return
+    recent = await db.get_recent_country_statements(50)
+    last = next((item for item in recent if item["user_id"] == message.from_user.id), None)
+    remaining = 0
+    if last:
+        remaining = max(0, config.STATEMENT_COOLDOWN_SECONDS - (int(time.time()) - int(last["created_at"])))
+    if remaining:
+        await answer_topic_safe(message, f"Официальное заявление можно публиковать ещё через <b>{format_duration(remaining)}</b>.")
+        return
+    year = await db.get_current_year()
+    statement_id = await db.create_country_statement(message.from_user.id, country["name"], statement, year)
+    if not statement_id:
+        await answer_topic_safe(message, "Не удалось опубликовать заявление. Проверь текст и повтори позже.")
+        return
+    await answer_topic_safe(message, f"📣 Заявление страны <b>{esc(country['name'])}</b> опубликовано в мировой ленте под номером <b>#{statement_id}</b>.", reply_markup=MORE_INLINE)
+
+
+@dp.message(Command("statements"))
+async def cmd_statements(message: Message):
+    statements = await db.get_recent_country_statements(12)
+    if not statements:
+        await answer_topic_safe(message, "📣 Официальных заявлений пока нет.", reply_markup=MORE_INLINE)
+        return
+    lines = ["📣 <b>Официальные заявления стран</b>", ""]
+    for item in statements:
+        year = f" · {item['game_year']} год" if item.get("game_year") else ""
+        lines.append(f"• <b>{esc(item['country_name'])}</b>{year}\n{esc(item['statement'][:500])}")
+    await answer_topic_safe(message, "\n\n".join(lines), reply_markup=MORE_INLINE)
+
+
 @dp.message(Command("myid"))
 async def cmd_myid(message: Message):
     await answer_topic_safe(message, f"Твой telegram user_id: <code>{message.from_user.id}</code>")
@@ -2588,6 +2628,8 @@ async def cmd_help(message: Message):
         "<code>/pmc_recruit количество</code> — набор (КД 6 часов)\n"
         "<code>/pmc_help</code> — подробная инструкция по регистрации и работе ЧВК\n"
         "<code>/war_history</code> — история завершённых войн своей страны\n"
+        "<code>/statement текст</code> — официальное заявление страны (КД 30 минут)\n"
+        "<code>/statements</code> — публичная лента заявлений стран\n"
     )
     if is_admin(message.from_user.id):
         text += "\n<b>🔐 Панель администратора</b>\n<code>/pmc_sanction ID тип причина</code> — санкция ЧВК."
