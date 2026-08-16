@@ -2089,6 +2089,64 @@ async def _trade_list_text(user_id: int) -> str:
     return "\n".join(lines)
 
 
+@dp.message(Command("pact_offer"))
+async def cmd_pact_offer(message: Message):
+    parts = message.text.split(maxsplit=4)
+    if len(parts) < 5 or not parts[1].isdigit() or not parts[3].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/pact_offer user_id non_aggression|defense|trade дни условия</code>")
+        return
+    if int(parts[1]) == message.from_user.id:
+        await answer_topic_safe(message, "Нельзя заключить пакт со своей страной.")
+        return
+    pact_id = await db.create_diplomatic_pact(message.from_user.id, int(parts[1]), parts[2], parts[4], int(parts[3]))
+    if not pact_id:
+        await answer_topic_safe(message, "Не удалось создать предложение. Проверь user_id, тип, срок от 1 до 30 дней и отсутствие действующего пакта с этой страной.")
+        return
+    await answer_topic_safe(message, f"🤝 Предложение пакта <b>#{pact_id}</b> создано. Страна получателя увидит его в <code>/pacts</code>.")
+
+
+@dp.message(Command("pacts"))
+async def cmd_pacts(message: Message):
+    pacts = await db.list_diplomatic_pacts(message.from_user.id, 20)
+    if not pacts:
+        await answer_topic_safe(message, "🤝 У твоей страны пока нет дипломатических пактов.")
+        return
+    labels = {"non_aggression": "ненападение", "defense": "оборонный", "trade": "торговый"}
+    lines = ["🤝 <b>Дипломатические пакты</b>", ""]
+    for pact in pacts:
+        if pact["proposer_id"] == message.from_user.id:
+            other = pact.get("target_name") or str(pact["target_id"])
+            direction = "ты предложил"
+        else:
+            other = pact.get("proposer_name") or str(pact["proposer_id"])
+            direction = "тебе предложили"
+        action = ""
+        if pact["status"] == "pending" and pact["target_id"] == message.from_user.id:
+            action = f" · принять: <code>/pact_accept {pact['id']}</code> или отклонить: <code>/pact_reject {pact['id']}</code>"
+        lines.append(f"• Пакт #{pact['id']} · {labels.get(pact['pact_type'], pact['pact_type'])} · {direction} страна <b>{esc(other)}</b> · статус: <b>{pact['status']}</b>{action}\n  Условия: {esc(pact['terms'][:260])}")
+    await answer_topic_safe(message, "\n\n".join(lines), reply_markup=MORE_INLINE)
+
+
+@dp.message(Command("pact_accept"))
+async def cmd_pact_accept(message: Message):
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/pact_accept ID</code>")
+        return
+    result = await db.resolve_diplomatic_pact(int(parts[1]), message.from_user.id, True)
+    await answer_topic_safe(message, "✅ Пакт принят и действует до указанной даты." if result else "Пакт не найден, уже обработан или истёк.")
+
+
+@dp.message(Command("pact_reject"))
+async def cmd_pact_reject(message: Message):
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/pact_reject ID</code>")
+        return
+    result = await db.resolve_diplomatic_pact(int(parts[1]), message.from_user.id, False)
+    await answer_topic_safe(message, "Пакт отклонён." if result else "Пакт не найден, уже обработан или истёк.")
+
+
 @dp.message(Command("trade"))
 async def cmd_trade(message: Message):
     await answer_topic_safe(message, await _trade_list_text(message.from_user.id), reply_markup=MORE_INLINE)
@@ -2630,6 +2688,9 @@ async def cmd_help(message: Message):
         "<code>/war_history</code> — история завершённых войн своей страны\n"
         "<code>/statement текст</code> — официальное заявление страны (КД 30 минут)\n"
         "<code>/statements</code> — публичная лента заявлений стран\n"
+        "<code>/pact_offer ID тип дни условия</code> — предложить дипломатический пакт\n"
+        "<code>/pacts</code> — свои предложения и действующие пакты\n"
+        "<code>/pact_accept ID</code> / <code>/pact_reject ID</code> — ответить на предложение\n"
     )
     if is_admin(message.from_user.id):
         text += "\n<b>🔐 Панель администратора</b>\n<code>/pmc_sanction ID тип причина</code> — санкция ЧВК."

@@ -137,6 +137,20 @@ CREATE INDEX IF NOT EXISTS idx_world_events_active ON world_events(active, creat
 CREATE INDEX IF NOT EXISTS idx_trade_contracts_target ON trade_contracts(target_id, status);
 CREATE INDEX IF NOT EXISTS idx_trade_contracts_proposer ON trade_contracts(proposer_id, status);
 
+CREATE TABLE IF NOT EXISTS diplomatic_pacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    proposer_id INTEGER NOT NULL,
+    target_id INTEGER NOT NULL,
+    pact_type TEXT NOT NULL DEFAULT 'non_aggression',
+    terms TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'active', 'rejected', 'expired', 'breached', 'cancelled')),
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    resolved_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_diplomatic_pacts_parties ON diplomatic_pacts(proposer_id, target_id, status);
+
 CREATE TABLE IF NOT EXISTS buildings (
     user_id INTEGER NOT NULL,
     building_type TEXT NOT NULL,
@@ -712,6 +726,67 @@ async def reject_trade_contract(contract_id: int, target_id: int) -> bool:
         cur = await db.execute("UPDATE trade_contracts SET status = 'rejected', resolved_at = ? WHERE id = ? AND target_id = ? AND status = 'pending'", (int(time.time()), contract_id, target_id))
         await db.commit()
         return cur.rowcount == 1
+
+
+async def create_diplomatic_pact(proposer_id: int, target_id: int, pact_type: str, terms: str, duration_days: int, timestamp: int | None = None):
+    timestamp = int(timestamp or time.time())
+    pact_type = (pact_type or "").strip().lower()
+    terms = " ".join(str(terms or "").split())[:1000]
+    if proposer_id == target_id or pact_type not in {"non_aggression", "defense", "trade"} or not terms or duration_days < 1 or duration_days > 30:
+        return None
+    async with _connect() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        cur = await db.execute("SELECT 1 FROM countries WHERE user_id IN (?, ?)", (proposer_id, target_id))
+        if len(await cur.fetchall()) != 2:
+            await db.rollback()
+            return None
+        cur = await db.execute(
+            "SELECT 1 FROM diplomatic_pacts WHERE proposer_id = ? AND target_id = ? AND status IN ('pending', 'active')",
+            (proposer_id, target_id),
+        )
+        if await cur.fetchone():
+            await db.rollback()
+            return None
+        cur = await db.execute(
+            "INSERT INTO diplomatic_pacts (proposer_id, target_id, pact_type, terms, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (proposer_id, target_id, pact_type, terms, timestamp, timestamp + duration_days * 86400),
+        )
+        await db.commit()
+        return int(cur.lastrowid)
+
+
+async def list_diplomatic_pacts(user_id: int, limit: int = 20):
+    now = int(time.time())
+    async with _connect() as db:
+        await db.execute("UPDATE diplomatic_pacts SET status = 'expired', resolved_at = ? WHERE status IN ('pending', 'active') AND expires_at <= ?", (now, now))
+        await db.commit()
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT p.*, a.name AS proposer_name, b.name AS target_name
+               FROM diplomatic_pacts p
+               LEFT JOIN countries a ON a.user_id = p.proposer_id
+               LEFT JOIN countries b ON b.user_id = p.target_id
+               WHERE p.proposer_id = ? OR p.target_id = ?
+               ORDER BY p.id DESC LIMIT ?""",
+            (user_id, user_id, limit),
+        )
+        return [dict(row) for row in await cur.fetchall()]
+
+
+async def resolve_diplomatic_pact(pact_id: int, target_id: int, accept: bool, timestamp: int | None = None):
+    timestamp = int(timestamp or time.time())
+    async with _connect() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM diplomatic_pacts WHERE id = ? AND target_id = ? AND status = 'pending'", (pact_id, target_id))
+        pact = await cur.fetchone()
+        if not pact or pact["expires_at"] <= timestamp:
+            await db.rollback()
+            return None
+        status = "active" if accept else "rejected"
+        await db.execute("UPDATE diplomatic_pacts SET status = ?, resolved_at = ? WHERE id = ?", (status, timestamp, pact_id))
+        await db.commit()
+        return {**dict(pact), "status": status}
 
 
 async def delete_country(user_id: int) -> bool:
