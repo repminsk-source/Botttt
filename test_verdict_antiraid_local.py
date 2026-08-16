@@ -17,6 +17,11 @@ def test_verdict_cards():
     assert "ЧАСТИЧНЫЙ УСПЕХ" in action["verdict_text"]
     assert "Почему:" in action["verdict_text"]
     assert "Следующие шаги:" in action["verdict_text"]
+    assert "<b>ЧАСТИЧНЫЙ УСПЕХ" in action["verdict_text"]
+    assert "<b>Почему:</b>" in action["verdict_text"]
+    escaped = ai._compose_action_verdict({"success": True, "headline": "Тест <script>", "summary": "A & B"})
+    assert "&lt;script&gt;" in escaped["verdict_text"]
+    assert "A &amp; B" in escaped["verdict_text"]
     assert len(action["verdict_text"]) < 1400
 
     war = ai._compose_war_verdict({

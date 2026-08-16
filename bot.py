@@ -1463,7 +1463,7 @@ async def cmd_defend(message: Message):
                 await db.log_war(pending["attacker_id"], attacker["name"], pending["defender_id"], defender["name"], combined_text, outcome, verdict["verdict_text"])
                 await db.complete_pending_war(war_id)
         labels = {"attacker_win": f"🏆 Победа {esc(attacker['name'])}!", "defender_win": f"🛡️ {esc(defender['name'])} отстояла свои границы!", "draw": "🤝 Ничья — обе стороны понесли потери."}
-        await thinking_msg.edit_text(f"{labels.get(outcome, 'Исход неясен.')}\n\n{esc(verdict['verdict_text'])}\n\nВойна #{war_id} завершена после ответа обороны.")
+        await thinking_msg.edit_text(f"{labels.get(outcome, 'Исход неясен.')}\n\n{verdict['verdict_text']}\n\nВойна #{war_id} завершена после ответа обороны.")
     except Exception:
         await db.reset_pending_war(war_id)
         raise
@@ -1593,7 +1593,7 @@ async def cmd_action(message: Message):
 
     result_text = (
         f"📜 <b>Вердикт по действию {esc(country['name'])}</b> ({current_year} год)\n\n"
-        f"{esc(verdict['verdict_text'])}\n\n"
+        f"{verdict['verdict_text']}\n\n"
         f"<b>Изменения:</b>\n{changes_text}"
     )
     await thinking_msg.edit_text(result_text)

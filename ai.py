@@ -1,3 +1,4 @@
+import html
 import json
 import re
 import httpx
@@ -347,9 +348,11 @@ def _clamp_changes(changes: dict, max_delta: int, max_sum_positive: int | None =
 
 
 def _text(value, fallback: str, limit: int = 550) -> str:
+    """Escape untrusted model text before trusted Telegram markup is added."""
     value = str(value or "").strip()
     if not value:
         value = fallback
+    value = html.escape(value, quote=False)
     return value if len(value) <= limit else value[:limit - 1].rstrip() + "…"
 
 
