@@ -25,6 +25,8 @@ EXPECTED = {
     "ui:diplomacy": "callback_diplomacy",
     "ui:guide": "callback_guide",
     "ui:back": "callback_back",
+    "premium:open": "callback_premium",
+    "premium:buy": "callback_premium_buy",
 }
 BUILD_CALLBACKS = {
     "build:farm", "build:mine", "build:market", "build:well", "build:granary",

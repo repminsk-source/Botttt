@@ -53,9 +53,12 @@ class AntiSpamMiddleware(BaseMiddleware):
     async def _is_group_admin(self, event, data) -> bool:
         chat = self._chat_from_event(event)
         user = getattr(event, "from_user", None)
-        if not chat or chat.type not in {"group", "supergroup"} or not user:
+        if not chat or getattr(chat, "type", None) not in {"group", "supergroup"} or not user:
             return False
-        key = (chat.id, user.id)
+        chat_id = getattr(chat, "id", None)
+        if chat_id is None:
+            return False
+        key = (chat_id, user.id)
         now = time.monotonic()
         cached = self._admin_cache.get(key)
         if cached and now - cached[0] < config.GROUP_RAID_ADMIN_CACHE_SECONDS:
@@ -64,7 +67,7 @@ class AntiSpamMiddleware(BaseMiddleware):
         if bot is None:
             return False
         try:
-            member = await bot.get_chat_member(chat.id, user.id)
+            member = await bot.get_chat_member(chat_id, user.id)
             allowed = getattr(member, "status", "") in {"creator", "administrator"}
         except Exception:
             # A failed admin lookup must fail closed during lockdown.
@@ -75,10 +78,14 @@ class AntiSpamMiddleware(BaseMiddleware):
     async def _group_raid_gate(self, event, data, user_id: int) -> bool:
         """Return True when the event may continue to a gameplay handler."""
         chat = self._chat_from_event(event)
-        if not chat or chat.type not in {"group", "supergroup"}:
+        if not chat or getattr(chat, "type", None) not in {"group", "supergroup"}:
+            return True
+        chat_id = getattr(chat, "id", None)
+        # Telegram always supplies an ID, but partial test/update objects may not.
+        # Do not let moderation metadata break the underlying gameplay handler.
+        if chat_id is None:
             return True
         now = time.monotonic()
-        chat_id = chat.id
         if await self._is_group_admin(event, data):
             return True
 
