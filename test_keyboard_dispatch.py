@@ -29,6 +29,9 @@ EXPECTED = {
     "ui:pmc": "callback_pmc",
     "premium:buy": "callback_premium_buy",
 }
+PMC_CALLBACKS = {
+    "pmc:profile", "pmc:requests", "pmc:recruit", "pmc:fund", "pmc:action", "pmc:news", "pmc:list", "pmc:help", "ui:more",
+}
 BUILD_CALLBACKS = {
     "build:farm", "build:mine", "build:market", "build:well", "build:granary",
     "build:sawmill", "build:iron_mine", "build:coal_mine", "build:oil_rig",
@@ -44,7 +47,8 @@ def test_callback_handlers_registered():
         # The callback filter is a MagicFilter whose repr is opaque, so verify
         # the callback names and exact count after importing the real dispatcher.
         names[handler.callback.__name__] = names.get(handler.callback.__name__, 0) + 1
-    assert set(names) == set(EXPECTED.values()) | {"callback_build_type"}
+    expected_names = set(EXPECTED.values()) | {"callback_build_type", "callback_pmc_profile", "callback_pmc_requests", "callback_pmc_list", "callback_pmc_help", "callback_pmc_command_hint"}
+    assert set(names) == expected_names
     assert all(count == 1 for count in names.values())
     actual_build_callbacks = {
         button.callback_data
@@ -53,6 +57,13 @@ def test_callback_handlers_registered():
         if button.callback_data and button.callback_data.startswith("build:")
     }
     assert actual_build_callbacks == BUILD_CALLBACKS
+    actual_pmc_callbacks = {
+        button.callback_data
+        for row in bot.PMC_INLINE.inline_keyboard
+        for button in row
+        if button.callback_data
+    }
+    assert actual_pmc_callbacks == PMC_CALLBACKS
 
 
 if __name__ == "__main__":

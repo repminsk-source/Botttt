@@ -266,6 +266,14 @@ PROGRESS_INLINE = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="📊 Сводка", callback_data="ui:country"), InlineKeyboardButton(text="⬅️ Главное меню", callback_data="ui:back")],
 ])
 
+PMC_INLINE = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="📊 Профиль", callback_data="pmc:profile"), InlineKeyboardButton(text="📨 Заказы", callback_data="pmc:requests")],
+    [InlineKeyboardButton(text="👥 Набор", callback_data="pmc:recruit"), InlineKeyboardButton(text="💰 Бюджет", callback_data="pmc:fund")],
+    [InlineKeyboardButton(text="⚔️ Операция", callback_data="pmc:action"), InlineKeyboardButton(text="📰 Новости", callback_data="pmc:news")],
+    [InlineKeyboardButton(text="🌐 Организации", callback_data="pmc:list"), InlineKeyboardButton(text="📖 Правила", callback_data="pmc:help")],
+    [InlineKeyboardButton(text="⬅️ Разделы", callback_data="ui:more")],
+])
+
 
 def callback_message(callback: CallbackQuery, text: str) -> Message:
     """Route a callback action under the clicker's identity, never the card author."""
@@ -1907,9 +1915,68 @@ async def menu_more(message: Message):
     )
 
 
+async def render_pmc_dashboard(message: Message, owner_id: int | None = None):
+    pmc = await db.get_pmc_by_owner(message.from_user.id)
+    if not pmc:
+        text = (
+            "🏴 <b>Центр ЧВК</b>\n\n"
+            "ЧВК — самостоятельная организация, отдельная от страны.\n\n"
+            "Создай организацию командой:\n<code>/pmc_create Название</code>\n\n"
+            "После регистрации здесь появятся профиль, бюджет, набор, заказы, операции и новости."
+        )
+    else:
+        label = "Террористическая организация" if pmc["org_type"] == "terror" else "ЧВК"
+        text = (
+            f"🏴 <b>Центр {label}</b>\n\n"
+            f"<b>{esc(pmc['name'])}</b> · статус: <b>{esc(pmc['status'])}</b>\n"
+            f"Репутация: <b>{pmc['reputation']}/100</b> · личный состав: <b>{pmc['personnel']:,}</b>\n"
+            f"Бюджет организации: <b>{pmc['inventory_gold']:,}</b>\n\n"
+            "Выбери действие в меню ниже. Статистика страны и ЧВК не смешивается."
+        )
+    await answer_topic_safe(message, text, reply_markup=PMC_INLINE, owner_id=owner_id)
+
+
 @dp.message(F.text == "🏴 ЧВК")
 async def menu_pmc(message: Message):
-    await cmd_pmc_help(message)
+    await render_pmc_dashboard(message)
+
+
+@dp.callback_query(F.data == "ui:pmc")
+async def callback_pmc(callback: CallbackQuery):
+    await callback.answer()
+    await render_pmc_dashboard(callback.message.model_copy(update={"from_user": callback.from_user}), owner_id=callback.from_user.id)
+
+
+@dp.callback_query(F.data == "pmc:profile")
+async def callback_pmc_profile(callback: CallbackQuery):
+    await finish_callback(callback, "/pmc_profile", cmd_pmc_profile, PMC_INLINE)
+
+
+@dp.callback_query(F.data == "pmc:requests")
+async def callback_pmc_requests(callback: CallbackQuery):
+    await finish_callback(callback, "/pmc_requests", cmd_pmc_requests, PMC_INLINE)
+
+
+@dp.callback_query(F.data == "pmc:list")
+async def callback_pmc_list(callback: CallbackQuery):
+    await finish_callback(callback, "/pmc_list", cmd_pmc_list, PMC_INLINE)
+
+
+@dp.callback_query(F.data == "pmc:help")
+async def callback_pmc_help(callback: CallbackQuery):
+    await finish_callback(callback, "/pmc_help", cmd_pmc_help, PMC_INLINE)
+
+
+@dp.callback_query(F.data.in_({"pmc:recruit", "pmc:fund", "pmc:action", "pmc:news"}))
+async def callback_pmc_command_hint(callback: CallbackQuery):
+    await callback.answer()
+    hints = {
+        "pmc:recruit": "👥 <b>Набор сотрудников</b>\n\nВведи команду отдельным сообщением:\n<code>/pmc_recruit количество</code>\n\nКД — 6 часов, максимум за один набор — 2 500 человек.",
+        "pmc:fund": "💰 <b>Бюджет ЧВК</b>\n\nФинансирование от страны необязательно. Для добровольного перевода введи:\n<code>/pmc_fund сумма</code>",
+        "pmc:action": "⚔️ <b>Военная операция</b>\n\nОпиши реалистичную операцию минимум 50 символами:\n<code>/pmc_action описание</code>\n\nКД — 10 минут. Статистика страны не изменяется.",
+        "pmc:news": "📰 <b>Новость ЧВК</b>\n\nОпубликуй официальное сообщение минимум 50 символами:\n<code>/pmc_news текст</code>\n\nЛента новостей открывается кнопкой «Новости» после публикации.",
+    }
+    await answer_topic_safe(callback.message, hints[callback.data], reply_markup=PMC_INLINE, owner_id=callback.from_user.id)
 
 
 @dp.callback_query(F.data == "ui:more")
@@ -2068,11 +2135,6 @@ async def callback_diplomacy(callback: CallbackQuery):
 @dp.callback_query(F.data == "ui:guide")
 async def callback_guide(callback: CallbackQuery):
     await finish_callback(callback, "/guide", cmd_guide, MAIN_INLINE)
-
-
-@dp.callback_query(F.data == "ui:pmc")
-async def callback_pmc(callback: CallbackQuery):
-    await finish_callback(callback, "/pmc_help", cmd_pmc_help, MORE_INLINE)
 
 
 @dp.message(F.text == "⬅️ Назад")
@@ -2622,7 +2684,7 @@ async def cmd_pmc_create(message: Message):
         await answer_topic_safe(message, "Не удалось создать организацию. У владельца уже есть организация или это название занято.")
         return
     label = "террористическая организация" if org_type == "terror" else "ЧВК"
-    await answer_topic_safe(message, f"✅ Создана отдельная организация: {label} <b>{esc(name)}</b> (ID: <code>{pmc_id}</code>).\nСтартовый бюджет организации: <b>{config.PMC_STARTING_FUNDS:,}</b>.\nПрофиль: <code>/pmc_profile</code>\nСтрана для создания не требуется; финансирование от страны — только добровольное спонсорство через <code>/pmc_fund</code>.")
+    await answer_topic_safe(message, f"✅ Создана отдельная организация: {label} <b>{esc(name)}</b> (ID: <code>{pmc_id}</code>).\nСтартовый бюджет организации: <b>{config.PMC_STARTING_FUNDS:,}</b>.\nПрофиль: <code>/pmc_profile</code>\nСтрана для создания не требуется; финансирование от страны — только добровольное спонсорство через <code>/pmc_fund</code>.", reply_markup=PMC_INLINE)
 
 
 @dp.message(Command("pmc_help"))
@@ -2643,6 +2705,7 @@ async def cmd_pmc_help(message: Message):
         "Проверь входящие запросы: <code>/pmc_requests</code>. Принять: <code>/pmc_accept номер</code>, отклонить: <code>/pmc_reject номер</code>.\n\n"
         "<b>Важно</b>\n"
         "Стране разрешено иметь максимум 2 активных договора с ЧВК. Анонимный заказ должен иметь понятную RP-причину. При нарушениях куратор может вынести предупреждение, очистить инвентарь, приостановить или дисквалифицировать организацию. Для террористической организации официальный набор и обычные анонимные заказы запрещены.",
+        reply_markup=PMC_INLINE,
     )
 
 
@@ -2662,6 +2725,7 @@ async def cmd_pmc_profile(message: Message):
         f"Техника: <b>{pmc['equipment']:,}</b> · средства: <b>{pmc['inventory_gold']:,}</b>\n\n"
         "Запросы заказчиков: <code>/pmc_requests</code>\n"
         "Набор: <code>/pmc_recruit количество</code>",
+        reply_markup=PMC_INLINE,
     )
 
 
@@ -2675,7 +2739,7 @@ async def cmd_pmc_list(message: Message):
     for pmc in items:
         label = "Террор" if pmc["org_type"] == "terror" else "ЧВК"
         lines.append(f"<code>{pmc['id']}</code> · {label} <b>{esc(pmc['name'])}</b> · репутация {pmc['reputation']}/100")
-    await answer_topic_safe(message, "\n".join(lines))
+    await answer_topic_safe(message, "\n".join(lines), reply_markup=PMC_INLINE)
 
 
 @dp.message(Command("pmc_request"))
@@ -2725,7 +2789,7 @@ async def cmd_pmc_requests(message: Message):
     lines = [f"📨 <b>Запросы «{esc(pmc['name'])}»</b>", ""]
     for item in requests:
         lines.append(f"#{item['id']} — {esc(item['request_text'])}\nПринять: <code>/pmc_accept {item['id']}</code> · отклонить: <code>/pmc_reject {item['id']}</code>")
-    await answer_topic_safe(message, "\n".join(lines))
+    await answer_topic_safe(message, "\n".join(lines), reply_markup=PMC_INLINE)
 
 
 @dp.message(Command("pmc_accept"))
@@ -2754,7 +2818,7 @@ async def cmd_pmc_reject(message: Message):
         await answer_topic_safe(message, "Формат: <code>/pmc_reject номер_запроса</code>")
         return
     result = await db.resolve_pmc_request(int(parts[1]), message.from_user.id, False)
-    await answer_topic_safe(message, "Запрос отклонён." if result else "Запрос не найден или уже обработан.")
+    await answer_topic_safe(message, "Запрос отклонён." if result else "Запрос не найден или уже обработан.", reply_markup=PMC_INLINE)
 
 
 @dp.message(Command("pmc_action"))
@@ -2793,7 +2857,7 @@ async def cmd_pmc_action(message: Message):
             await thinking.edit_text(esc(verdict.get("verdict_text", "⚠️ Не удалось получить вердикт.")))
             return
         await db.touch_pmc_action(pmc["id"], user_id)
-        await thinking.edit_text(f"📜 <b>Военный вердикт ЧВК «{esc(pmc['name'])}»</b> ({current_year} год)\n\n{verdict['verdict_text']}\n\n<i>Вердикт не изменяет статистику страны автоматически.</i>")
+        await thinking.edit_text(f"📜 <b>Военный вердикт ЧВК «{esc(pmc['name'])}»</b> ({current_year} год)\n\n{verdict['verdict_text']}\n\n<i>Вердикт не изменяет статистику страны автоматически.</i>", reply_markup=PMC_INLINE)
     finally:
         _ai_inflight.discard(user_id)
 
@@ -2821,22 +2885,20 @@ async def cmd_pmc_news(message: Message):
     if not statement_id:
         await answer_topic_safe(message, "Новость не опубликована: кулдаун уже действует или организация недоступна.")
         return
-    await answer_topic_safe(message, f"📰 Новость ЧВК «{esc(pmc['name'])}» опубликована под номером <b>#{statement_id}</b>.", reply_markup=MORE_INLINE)
+    await answer_topic_safe(message, f"📰 Новость ЧВК «{esc(pmc['name'])}» опубликована под номером <b>#{statement_id}</b>.", reply_markup=PMC_INLINE)
 
 
 @dp.message(Command("pmc_news_feed"))
 async def cmd_pmc_news_feed(message: Message):
     statements = await db.get_recent_pmc_statements(12)
     if not statements:
-        await answer_topic_safe(message, "📰 Публичных новостей ЧВК пока нет.", reply_markup=MORE_INLINE)
+        await answer_topic_safe(message, "📰 Публичных новостей ЧВК пока нет.", reply_markup=PMC_INLINE)
         return
     lines = ["📰 <b>Новости ЧВК</b>", ""]
     for item in statements:
         year = f" · {item['game_year']} год" if item.get("game_year") else ""
         lines.append(f"• <b>{esc(item['organization_name'])}</b>{year}\n{esc(item['statement'][:500])}")
-    await answer_topic_safe(message, "\n\n".join(lines), reply_markup=MORE_INLINE)
-
-
+    await answer_topic_safe(message, "\n\n".join(lines), reply_markup=PMC_INLINE)
 @dp.message(Command("pmc_fund"))
 async def cmd_pmc_fund(message: Message):
     parts = message.text.split()
@@ -2849,7 +2911,7 @@ async def cmd_pmc_fund(message: Message):
         return
     amount = int(parts[1])
     ok = await db.fund_pmc(pmc["id"], message.from_user.id, amount)
-    await answer_topic_safe(message, f"✅ В инвентарь организации внесено 💰{amount:,}." if ok else "❌ Недостаточно денег страны или организация недоступна.")
+    await answer_topic_safe(message, f"✅ В инвентарь организации внесено 💰{amount:,}." if ok else "❌ Недостаточно денег страны или организация недоступна.", reply_markup=PMC_INLINE)
 
 
 @dp.message(Command("pmc_recruit"))
@@ -2867,7 +2929,7 @@ async def cmd_pmc_recruit(message: Message):
         return
     ok, detail = await db.recruit_pmc(pmc["id"], message.from_user.id, int(parts[1]))
     errors = {"batch_limit": "За один набор можно принять максимум 2 500 человек.", "cooldown": "КД набора ещё не закончился — он составляет 6 часов.", "personnel_limit": "Достигнут предел 250 000 служащих.", "funds": "Недостаточно средств в инвентаре ЧВК.", "not_owner": "Организация недоступна или ты не её владелец."}
-    await answer_topic_safe(message, f"✅ Набор завершён. Затрачено средств: {detail:,}." if ok else f"❌ {errors.get(detail, 'Набор отклонён.')}" )
+    await answer_topic_safe(message, f"✅ Набор завершён. Затрачено средств: {detail:,}." if ok else f"❌ {errors.get(detail, 'Набор отклонён.')}" , reply_markup=PMC_INLINE)
 
 
 @dp.message(Command("pmc_sanction"))
