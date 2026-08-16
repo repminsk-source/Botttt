@@ -1,4 +1,5 @@
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -37,6 +38,8 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gpt-oss:20b-cloud")
 OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "")
 # Provider mode: ollama = Ollama only, fallback = Ollama then remote fallbacks.
 AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama").strip().lower()
+# URL отдельного сервиса собственной модели; используется при AI_PROVIDER=local.
+LOCAL_MODEL_URL = os.getenv("LOCAL_MODEL_URL", "http://localhost:8000").rstrip("/")
 
 # --- Игровые настройки ---
 DB_PATH = os.getenv("DB_PATH", "gavan.db")

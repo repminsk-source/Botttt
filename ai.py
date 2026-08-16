@@ -4,7 +4,7 @@ import re
 import httpx
 from config import (
     GROK_API_KEY, GROK_MODEL, GEMINI_API_KEY, GEMINI_MODEL,
-    OLLAMA_ENABLED, OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_API_KEY, AI_PROVIDER,
+    OLLAMA_ENABLED, OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_API_KEY, AI_PROVIDER, LOCAL_MODEL_URL,
 )
 
 
@@ -189,6 +189,24 @@ def _build_war_prompt(attacker: dict, defender: dict, action_text: str, world_co
 Заявленная атака нападающего:
 {_INJECTION_GUARD}{action_text}{_INJECTION_GUARD_END}
 """
+
+
+async def _call_local_model(system_prompt: str, user_prompt: str) -> str:
+    """Call the user's own model server through a tiny OpenAI-like endpoint."""
+    payload = {
+        "system": system_prompt,
+        "prompt": user_prompt,
+        "max_new_tokens": 512,
+        "temperature": 0.7,
+    }
+    async with httpx.AsyncClient(timeout=120) as client:
+        response = await client.post(LOCAL_MODEL_URL + "/generate", json=payload)
+        response.raise_for_status()
+        data = response.json()
+        text = data.get("text") or data.get("response")
+        if not isinstance(text, str) or not text.strip():
+            raise RuntimeError("собственная модель вернула пустой ответ")
+        return text
 
 
 async def _call_ollama(system_prompt: str, user_prompt: str) -> str:
@@ -437,7 +455,9 @@ def _compose_war_verdict(parsed: dict) -> dict:
 async def _get_raw(system_prompt: str, user_prompt: str) -> tuple[str, Exception | None]:
     """Пробует Grok, при ошибке — Gemini. Возвращает (raw_text, None) или (None, last_error)."""
     last_error = None
-    if AI_PROVIDER == "ollama":
+    if AI_PROVIDER == "local":
+        callers = [_call_local_model]
+    elif AI_PROVIDER == "ollama":
         callers = [_call_ollama] if OLLAMA_ENABLED else []
     elif AI_PROVIDER == "fallback":
         callers = ([_call_ollama] if OLLAMA_ENABLED else []) + [_call_grok, _call_gemini]
