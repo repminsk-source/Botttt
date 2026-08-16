@@ -2324,6 +2324,184 @@ async def cmd_transfer(message: Message):
         await answer_topic_safe(message, "Не удалось передать: либо у нового user_id уже есть страна, либо старая не найдена.")
 
 
+@dp.message(Command("pmc_create"))
+async def cmd_pmc_create(message: Message):
+    """Create one PMC or terrorist organization per owner."""
+    payload = command_payload(message)
+    parts = payload.split(maxsplit=1)
+    org_type = "pmc"
+    if parts and parts[0].casefold() in {"terror", "террор", "terrorist"}:
+        org_type = "terror"
+        parts = parts[1:]
+    name = parts[0] if parts else ""
+    if not name:
+        await answer_topic_safe(message, "Формат: <code>/pmc_create Название</code> или <code>/pmc_create terror Название</code>")
+        return
+    if not await db.get_country(message.from_user.id):
+        await answer_topic_safe(message, "Сначала создай страну: <code>/founding Название</code>")
+        return
+    pmc_id = await db.create_pmc(message.from_user.id, name, org_type)
+    if not pmc_id:
+        await answer_topic_safe(message, "Не удалось создать организацию. У владельца уже есть организация или это название занято.")
+        return
+    label = "террористическая организация" if org_type == "terror" else "ЧВК"
+    await answer_topic_safe(message, f"✅ Создана {label} <b>{esc(name)}</b> (ID: <code>{pmc_id}</code>).\nПрофиль: <code>/pmc_profile</code>")
+
+
+@dp.message(Command("pmc_profile"))
+async def cmd_pmc_profile(message: Message):
+    pmc = await db.get_pmc_by_owner(message.from_user.id)
+    if not pmc:
+        await answer_topic_safe(message, "У тебя нет организации. Создай её через <code>/pmc_create Название</code>.")
+        return
+    label = "Террористическая организация" if pmc["org_type"] == "terror" else "ЧВК"
+    await answer_topic_safe(
+        message,
+        f"🏴 <b>{label}: {esc(pmc['name'])}</b>\n"
+        f"ID: <code>{pmc['id']}</code> · статус: <b>{pmc['status']}</b>\n"
+        f"Репутация: <b>{pmc['reputation']}/100</b>\n"
+        f"Личный состав: <b>{pmc['personnel']:,}/250 000</b>\n"
+        f"Техника: <b>{pmc['equipment']:,}</b> · средства: <b>{pmc['inventory_gold']:,}</b>\n\n"
+        "Запросы заказчиков: <code>/pmc_requests</code>\n"
+        "Набор: <code>/pmc_recruit количество</code>",
+    )
+
+
+@dp.message(Command("pmc_list"))
+async def cmd_pmc_list(message: Message):
+    items = await db.list_active_pmcs()
+    if not items:
+        await answer_topic_safe(message, "Активных организаций пока нет.")
+        return
+    lines = ["🏴 <b>Активные организации</b>", "", "Для анонимного запроса: <code>/pmc_request ID описание</code>", ""]
+    for pmc in items:
+        label = "Террор" if pmc["org_type"] == "terror" else "ЧВК"
+        lines.append(f"<code>{pmc['id']}</code> · {label} <b>{esc(pmc['name'])}</b> · репутация {pmc['reputation']}/100")
+    await answer_topic_safe(message, "\n".join(lines))
+
+
+@dp.message(Command("pmc_request"))
+async def cmd_pmc_request(message: Message):
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3 or not parts[1].isdigit() or len(parts[2].strip()) < 30:
+        await answer_topic_safe(message, "Формат: <code>/pmc_request ID описание</code>. Описание заказа — минимум 30 символов.")
+        return
+    country = await db.get_country(message.from_user.id)
+    pmc = await db.get_pmc(int(parts[1]))
+    if not country or not pmc or pmc["status"] != "active":
+        await answer_topic_safe(message, "Страна или активная организация не найдена.")
+        return
+    if pmc["org_type"] == "terror":
+        await answer_topic_safe(message, "Официальный анонимный заказ в террористическую организацию запрещён. Для неё действует отдельная скрытая RP-процедура куратора.")
+        return
+    request_id = await db.create_pmc_request(pmc["id"], message.from_user.id, parts[2].strip())
+    if not request_id:
+        await answer_topic_safe(message, "Нельзя создать запрос: у страны уже максимум 2 активных договора или организация недоступна.")
+        return
+    await hide_group_command(message)
+    await answer_topic_safe(message, f"✅ Анонимный запрос #{request_id} отправлен в «{esc(pmc['name'])}».\nОбычные игроки не увидят страну-заказчика.")
+    try:
+        await bot.send_message(
+            (await db.get_country(pmc["owner_id"]))["chat_id"] if await db.get_country(pmc["owner_id"]) else pmc["owner_id"],
+            f"📨 Новый анонимный заказ #{request_id} для «{esc(pmc['name'])}».\n"
+            f"Описание: {esc(parts[2].strip())}\n"
+            f"Принять: <code>/pmc_accept {request_id}</code> · отклонить: <code>/pmc_reject {request_id}</code>",
+        )
+    except Exception:
+        logger.info("Не удалось уведомить владельца ЧВК о запросе %s", request_id, exc_info=True)
+
+
+@dp.message(Command("pmc_requests"))
+async def cmd_pmc_requests(message: Message):
+    pmc = await db.get_pmc_by_owner(message.from_user.id)
+    if not pmc:
+        await answer_topic_safe(message, "У тебя нет организации.")
+        return
+    requests = await db.list_pmc_requests(pmc["id"])
+    if not requests:
+        await answer_topic_safe(message, "Новых анонимных запросов нет.")
+        return
+    lines = [f"📨 <b>Запросы «{esc(pmc['name'])}»</b>", ""]
+    for item in requests:
+        lines.append(f"#{item['id']} — {esc(item['request_text'])}\nПринять: <code>/pmc_accept {item['id']}</code> · отклонить: <code>/pmc_reject {item['id']}</code>")
+    await answer_topic_safe(message, "\n".join(lines))
+
+
+@dp.message(Command("pmc_accept"))
+async def cmd_pmc_accept(message: Message):
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/pmc_accept номер_запроса</code>")
+        return
+    result = await db.resolve_pmc_request(int(parts[1]), message.from_user.id, True)
+    if not result:
+        await answer_topic_safe(message, "Запрос не найден, уже обработан или лимит страны достигнут.")
+        return
+    await answer_topic_safe(message, f"✅ Анонимный запрос принят. Контракт: <code>{result['contract_id']}</code>.")
+    requester = await db.get_country(result["country_id"])
+    if requester:
+        try:
+            await bot.send_message(requester["chat_id"], f"✅ ЧВК приняла твой анонимный запрос #{result['id']}. Контракт: <code>{result['contract_id']}</code>.")
+        except Exception:
+            logger.info("Не удалось уведомить страну о принятии PMC-запроса", exc_info=True)
+
+
+@dp.message(Command("pmc_reject"))
+async def cmd_pmc_reject(message: Message):
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/pmc_reject номер_запроса</code>")
+        return
+    result = await db.resolve_pmc_request(int(parts[1]), message.from_user.id, False)
+    await answer_topic_safe(message, "Запрос отклонён." if result else "Запрос не найден или уже обработан.")
+
+
+@dp.message(Command("pmc_fund"))
+async def cmd_pmc_fund(message: Message):
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit() or int(parts[1]) <= 0:
+        await answer_topic_safe(message, "Формат: <code>/pmc_fund сумма</code>")
+        return
+    pmc = await db.get_pmc_by_owner(message.from_user.id)
+    if not pmc:
+        await answer_topic_safe(message, "Сначала создай организацию.")
+        return
+    amount = int(parts[1])
+    ok = await db.fund_pmc(pmc["id"], message.from_user.id, amount)
+    await answer_topic_safe(message, f"✅ В инвентарь организации внесено 💰{amount:,}." if ok else "❌ Недостаточно денег страны или организация недоступна.")
+
+
+@dp.message(Command("pmc_recruit"))
+async def cmd_pmc_recruit(message: Message):
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/pmc_recruit количество</code>. Максимум за набор — 2 500 человек.")
+        return
+    pmc = await db.get_pmc_by_owner(message.from_user.id)
+    if not pmc:
+        await answer_topic_safe(message, "Сначала создай организацию.")
+        return
+    if pmc["org_type"] == "terror":
+        await answer_topic_safe(message, "Официальный набор террористической организации запрещён. Нужна отдельная скрытая RP-отыгровка и решение куратора.")
+        return
+    ok, detail = await db.recruit_pmc(pmc["id"], message.from_user.id, int(parts[1]))
+    errors = {"batch_limit": "За один набор можно принять максимум 2 500 человек.", "cooldown": "КД набора ещё не закончился — он составляет 6 часов.", "personnel_limit": "Достигнут предел 250 000 служащих.", "funds": "Недостаточно средств в инвентаре ЧВК.", "not_owner": "Организация недоступна или ты не её владелец."}
+    await answer_topic_safe(message, f"✅ Набор завершён. Затрачено средств: {detail:,}." if ok else f"❌ {errors.get(detail, 'Набор отклонён.')}" )
+
+
+@dp.message(Command("pmc_sanction"))
+async def cmd_pmc_sanction(message: Message):
+    if not is_admin(message.from_user.id):
+        await answer_topic_safe(message, "Команда только для куратора/администратора.")
+        return
+    parts = message.text.split(maxsplit=3)
+    if len(parts) < 4 or not parts[1].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/pmc_sanction ID warn|inventory_clear|suspend|disqualify причина</code>")
+        return
+    ok = await db.sanction_pmc(int(parts[1]), parts[2], parts[3], message.from_user.id)
+    await answer_topic_safe(message, "✅ Санкция применена и записана в журнал." if ok else "❌ Организация не найдена или тип санкции указан неверно.")
+
+
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
     text = BEGINNER_GUIDE
@@ -2333,8 +2511,20 @@ async def cmd_help(message: Message):
             "Если бот не видит команду, используй <code>/help@имя_бота</code> "
             "или отключи Privacy Mode через BotFather."
         )
+    text += (
+        "\n\n<b>🏴 ЧВК и анонимные заказы</b>\n"
+        "<code>/pmc_create Название</code> — создать ЧВК\n"
+        "<code>/pmc_create terror Название</code> — создать террористическую организацию\n"
+        "<code>/pmc_list</code> — список организаций\n"
+        "<code>/pmc_request ID описание</code> — анонимно предложить заказ\n"
+        "<code>/pmc_profile</code> — профиль своей организации\n"
+        "<code>/pmc_requests</code> — входящие заказы ЧВК\n"
+        "<code>/pmc_fund сумма</code> — перевести деньги страны в инвентарь\n"
+        "<code>/pmc_recruit количество</code> — набор (КД 6 часов)\n"
+    )
     if is_admin(message.from_user.id):
-        text += "\n\n<b>🔐 Панель администратора</b>\nДополнительные команды доступны только администратору."
+        text += "\n<b>🔐 Панель администратора</b>\n<code>/pmc_sanction ID тип причина</code> — санкция ЧВК."
+
     await answer_topic_safe(message, text, reply_markup=MAIN_INLINE)
 
 

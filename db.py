@@ -190,6 +190,55 @@ CREATE TABLE IF NOT EXISTS premium_items (
     expires_at INTEGER,
     PRIMARY KEY (user_id, item_key)
 );
+
+-- Отдельные организации ЧВК/террористических группировок.
+CREATE TABLE IF NOT EXISTS pmcs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id INTEGER NOT NULL,
+    name TEXT NOT NULL UNIQUE,
+    org_type TEXT NOT NULL DEFAULT 'pmc' CHECK(org_type IN ('pmc', 'terror')),
+    reputation INTEGER NOT NULL DEFAULT 50,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'suspended', 'disqualified')),
+    personnel INTEGER NOT NULL DEFAULT 0 CHECK(personnel >= 0),
+    equipment INTEGER NOT NULL DEFAULT 0 CHECK(equipment >= 0),
+    inventory_gold INTEGER NOT NULL DEFAULT 0 CHECK(inventory_gold >= 0),
+    last_recruit_at INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pmc_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pmc_id INTEGER NOT NULL,
+    country_id INTEGER NOT NULL,
+    request_text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'accepted', 'rejected', 'cancelled')),
+    anonymous INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    resolved_at INTEGER,
+    resolved_by INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS pmc_contracts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pmc_id INTEGER NOT NULL,
+    country_id INTEGER NOT NULL,
+    request_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'completed', 'cancelled', 'disqualified')),
+    created_at INTEGER NOT NULL,
+    resolved_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS pmc_sanctions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pmc_id INTEGER NOT NULL,
+    sanction_type TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    actor_id INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pmc_requests_pmc_status ON pmc_requests(pmc_id, status);
+CREATE INDEX IF NOT EXISTS idx_pmc_contracts_country_status ON pmc_contracts(country_id, status);
 """
 
 # Колонки, которые могли отсутствовать в базах, созданных до этого обновления.
@@ -1237,3 +1286,212 @@ async def get_alliance_members(alliance_id: int):
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+
+# --- ЧВК и анонимные заказы ---
+
+async def create_pmc(owner_id: int, name: str, org_type: str = "pmc", timestamp: int | None = None):
+    name = " ".join(str(name or "").split())[:80]
+    if not name or org_type not in {"pmc", "terror"}:
+        return None
+    timestamp = int(timestamp or time.time())
+    async with _connect() as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        cur = await conn.execute("SELECT 1 FROM pmcs WHERE owner_id = ? AND status != 'disqualified'", (owner_id,))
+        if await cur.fetchone():
+            await conn.rollback()
+            return None
+        try:
+            cur = await conn.execute(
+                "INSERT INTO pmcs (owner_id, name, org_type, created_at) VALUES (?, ?, ?, ?)",
+                (owner_id, name, org_type, timestamp),
+            )
+        except aiosqlite.IntegrityError:
+            await conn.rollback()
+            return None
+        await conn.commit()
+        return int(cur.lastrowid)
+
+
+async def get_pmc(pmc_id: int):
+    async with _connect() as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute("SELECT * FROM pmcs WHERE id = ?", (pmc_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def get_pmc_by_owner(owner_id: int):
+    async with _connect() as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute(
+            "SELECT * FROM pmcs WHERE owner_id = ? AND status != 'disqualified' ORDER BY id DESC LIMIT 1",
+            (owner_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def list_active_pmcs(limit: int = 30):
+    async with _connect() as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute(
+            "SELECT * FROM pmcs WHERE status = 'active' ORDER BY reputation DESC, id DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(row) for row in await cur.fetchall()]
+
+
+async def create_pmc_request(pmc_id: int, country_id: int, request_text: str, timestamp: int | None = None):
+    request_text = " ".join(str(request_text or "").split())[:1500]
+    if not request_text:
+        return None
+    timestamp = int(timestamp or time.time())
+    async with _connect() as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        cur = await conn.execute("SELECT id, status FROM pmcs WHERE id = ? AND status = 'active'", (pmc_id,))
+        if not await cur.fetchone():
+            await conn.rollback()
+            return None
+        cur = await conn.execute("SELECT 1 FROM countries WHERE user_id = ?", (country_id,))
+        if not await cur.fetchone():
+            await conn.rollback()
+            return None
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM pmc_contracts WHERE country_id = ? AND status = 'active'",
+            (country_id,),
+        )
+        if (await cur.fetchone())[0] >= 2:
+            await conn.rollback()
+            return None
+        cur = await conn.execute(
+            "INSERT INTO pmc_requests (pmc_id, country_id, request_text, created_at) VALUES (?, ?, ?, ?)",
+            (pmc_id, country_id, request_text, timestamp),
+        )
+        await conn.commit()
+        return int(cur.lastrowid)
+
+
+async def list_pmc_requests(pmc_id: int, limit: int = 20):
+    async with _connect() as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute(
+            "SELECT id, pmc_id, request_text, status, anonymous, created_at FROM pmc_requests WHERE pmc_id = ? AND status = 'pending' ORDER BY id DESC LIMIT ?",
+            (pmc_id, limit),
+        )
+        return [dict(row) for row in await cur.fetchall()]
+
+
+async def get_pmc_request(request_id: int):
+    async with _connect() as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute("SELECT * FROM pmc_requests WHERE id = ?", (request_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def resolve_pmc_request(request_id: int, pmc_owner_id: int, accept: bool, timestamp: int | None = None):
+    timestamp = int(timestamp or time.time())
+    async with _connect() as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute(
+            "SELECT r.*, p.owner_id, p.status AS pmc_status FROM pmc_requests r JOIN pmcs p ON p.id = r.pmc_id WHERE r.id = ? AND r.status = 'pending'",
+            (request_id,),
+        )
+        request = await cur.fetchone()
+        if not request or request["owner_id"] != pmc_owner_id or request["pmc_status"] != "active":
+            await conn.rollback()
+            return None
+        if not accept:
+            await conn.execute("UPDATE pmc_requests SET status = 'rejected', resolved_at = ?, resolved_by = ? WHERE id = ?", (timestamp, pmc_owner_id, request_id))
+            await conn.commit()
+            return {"accepted": False, **dict(request)}
+        cur = await conn.execute("SELECT COUNT(*) FROM pmc_contracts WHERE country_id = ? AND status = 'active'", (request["country_id"],))
+        if (await cur.fetchone())[0] >= 2:
+            await conn.rollback()
+            return None
+        await conn.execute("UPDATE pmc_requests SET status = 'accepted', resolved_at = ?, resolved_by = ? WHERE id = ?", (timestamp, pmc_owner_id, request_id))
+        cur = await conn.execute(
+            "INSERT INTO pmc_contracts (pmc_id, country_id, request_id, created_at) VALUES (?, ?, ?, ?)",
+            (request["pmc_id"], request["country_id"], request_id, timestamp),
+        )
+        await conn.commit()
+        return {"accepted": True, "contract_id": int(cur.lastrowid), **dict(request)}
+
+
+async def recruit_pmc(pmc_id: int, owner_id: int, amount: int, timestamp: int | None = None):
+    from config import PMC_MAX_BATCH_RECRUIT, PMC_MAX_PERSONNEL, PMC_RECRUIT_COOLDOWN_SECONDS, PMC_RECRUIT_COST_PER_PERSON
+    timestamp = int(timestamp or time.time())
+    if amount <= 0 or amount > PMC_MAX_BATCH_RECRUIT:
+        return False, "batch_limit"
+    async with _connect() as conn:
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("BEGIN IMMEDIATE")
+        cur = await conn.execute("SELECT * FROM pmcs WHERE id = ? AND owner_id = ? AND status = 'active'", (pmc_id, owner_id))
+        pmc = await cur.fetchone()
+        if not pmc:
+            await conn.rollback()
+            return False, "not_owner"
+        if pmc["last_recruit_at"] and timestamp - pmc["last_recruit_at"] < PMC_RECRUIT_COOLDOWN_SECONDS:
+            await conn.rollback()
+            return False, "cooldown"
+        if pmc["personnel"] + amount > PMC_MAX_PERSONNEL:
+            await conn.rollback()
+            return False, "personnel_limit"
+        cost = amount * PMC_RECRUIT_COST_PER_PERSON
+        if pmc["inventory_gold"] < cost:
+            await conn.rollback()
+            return False, "funds"
+        await conn.execute(
+            "UPDATE pmcs SET personnel = personnel + ?, inventory_gold = inventory_gold - ?, last_recruit_at = ? WHERE id = ?",
+            (amount, cost, timestamp, pmc_id),
+        )
+        await conn.commit()
+        return True, cost
+
+
+async def sanction_pmc(pmc_id: int, sanction_type: str, reason: str, actor_id: int, timestamp: int | None = None):
+    timestamp = int(timestamp or time.time())
+    allowed = {"warn", "inventory_clear", "suspend", "disqualify"}
+    if sanction_type not in allowed or not reason.strip():
+        return False
+    async with _connect() as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        cur = await conn.execute("SELECT id FROM pmcs WHERE id = ?", (pmc_id,))
+        if not await cur.fetchone():
+            await conn.rollback()
+            return False
+        if sanction_type == "inventory_clear":
+            await conn.execute("UPDATE pmcs SET personnel = 0, equipment = 0, inventory_gold = 0, reputation = MAX(0, reputation - 20) WHERE id = ?", (pmc_id,))
+        elif sanction_type == "suspend":
+            await conn.execute("UPDATE pmcs SET status = 'suspended', reputation = MAX(0, reputation - 15) WHERE id = ?", (pmc_id,))
+        elif sanction_type == "disqualify":
+            await conn.execute("UPDATE pmcs SET status = 'disqualified', personnel = 0, equipment = 0, inventory_gold = 0, reputation = 0 WHERE id = ?", (pmc_id,))
+            await conn.execute("UPDATE pmc_contracts SET status = 'disqualified', resolved_at = ? WHERE pmc_id = ? AND status = 'active'", (timestamp, pmc_id))
+        else:
+            await conn.execute("UPDATE pmcs SET reputation = MAX(0, reputation - 5) WHERE id = ?", (pmc_id,))
+        await conn.execute("INSERT INTO pmc_sanctions (pmc_id, sanction_type, reason, actor_id, created_at) VALUES (?, ?, ?, ?, ?)", (pmc_id, sanction_type, reason[:500], actor_id, timestamp))
+        await conn.commit()
+        return True
+
+
+async def fund_pmc(pmc_id: int, owner_id: int, amount: int, timestamp: int | None = None) -> bool:
+    """Move ordinary country money into the owner's PMC inventory atomically."""
+    if amount <= 0:
+        return False
+    timestamp = int(timestamp or time.time())
+    async with _connect() as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        cur = await conn.execute("SELECT owner_id, status FROM pmcs WHERE id = ?", (pmc_id,))
+        pmc = await cur.fetchone()
+        if not pmc or pmc[0] != owner_id or pmc[1] != "active":
+            await conn.rollback()
+            return False
+        cur = await conn.execute("UPDATE countries SET gold = gold - ? WHERE user_id = ? AND gold >= ?", (amount, owner_id, amount))
+        if cur.rowcount != 1:
+            await conn.rollback()
+            return False
+        await conn.execute("UPDATE pmcs SET inventory_gold = inventory_gold + ? WHERE id = ?", (amount, pmc_id))
+        await conn.commit()
+        return True
