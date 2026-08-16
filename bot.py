@@ -2054,6 +2054,12 @@ async def cmd_world_event(message: Message):
     if len(parts[2]) < config.MIN_NARRATIVE_LEN:
         await answer_topic_safe(message, f"Описание новости должно содержать минимум {config.MIN_NARRATIVE_LEN} символов.")
         return
+    latest_event_at = await db.get_latest_world_event_created_at()
+    remaining = config.WORLD_EVENT_COOLDOWN_SECONDS - (int(time.time()) - latest_event_at)
+    if remaining > 0:
+        minutes, seconds = divmod(remaining, 60)
+        await answer_topic_safe(message, f"⏳ Следующую мировую новость можно опубликовать через {minutes} мин {seconds} сек.")
+        return
     year = await db.get_current_year()
     event_id = await db.create_world_event(parts[1], parts[2], parts[0], year)
     await answer_topic_safe(message, f"🌎 Глобальное событие #{event_id} опубликовано.")

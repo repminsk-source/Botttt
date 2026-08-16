@@ -28,7 +28,7 @@ import db
 required_db = [
     "apply_upgrade", "apply_base", "apply_spy_operation", "apply_collect", "apply_purchase",
     "apply_mobilization", "apply_action_result", "apply_war_result", "create_pending_war", "get_pending_war", "list_pending_wars_for_attacker", "claim_pending_war", "reset_pending_war", "complete_pending_war", "create_world_event",
-    "get_world_events", "create_trade_contract", "accept_trade_contract", "reject_trade_contract",
+    "get_world_events", "get_latest_world_event_created_at", "create_trade_contract", "accept_trade_contract", "reject_trade_contract",
     "create_alliance", "join_alliance", "leave_alliance", "transfer_country", "delete_country",
 ]
 missing_db = [name for name in required_db if not hasattr(db, name)]

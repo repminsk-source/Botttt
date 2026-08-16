@@ -429,6 +429,13 @@ async def create_world_event(title: str, description: str, event_type: str = "wo
         return int(cur.lastrowid)
 
 
+async def get_latest_world_event_created_at() -> int:
+    async with _connect() as db:
+        cur = await db.execute("SELECT COALESCE(MAX(created_at), 0) FROM world_events")
+        row = await cur.fetchone()
+        return int(row[0] or 0)
+
+
 async def get_world_events(limit: int = 10, active_only: bool = True):
     async with _connect() as db:
         db.row_factory = aiosqlite.Row

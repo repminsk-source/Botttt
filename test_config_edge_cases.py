@@ -9,6 +9,11 @@ import db
 import market
 
 
+def test_requested_cooldowns():
+    assert config.ATTACK_COOLDOWN_SECONDS == 600
+    assert config.WORLD_EVENT_COOLDOWN_SECONDS == 600
+
+
 def test_invalid_environment_values():
     old_values = {key: os.environ.get(key) for key in ("BAD_INT", "BAD_FLOAT")}
     try:
@@ -58,6 +63,7 @@ async def test_world_year_zero_duration():
 
 
 if __name__ == "__main__":
+    test_requested_cooldowns()
     test_invalid_environment_values()
     test_market_zero_tick()
     asyncio.run(test_world_year_zero_duration())
