@@ -170,7 +170,6 @@ RESOURCE_NAMES_RU = {
 # ресурсы/вердикты несколько раз за один интервал.
 _user_locks: dict[int, asyncio.Lock] = {}
 _ai_inflight: set[int] = set()
-_war_inflight: set[int] = set()
 
 
 def get_user_lock(user_id: int) -> asyncio.Lock:
@@ -568,13 +567,13 @@ async def cmd_start(message: Message):
     existing = await db.get_country(message.from_user.id)
     if existing:
         await animate(message, ["🌍 Загружаю твою державу…", "✅ С возвращением в ВПИ ГАВАНЬ!"])
-        await answer_topic_safe(message, "Начни с кнопки «📊 Моя страна». Я буду подсказывать следующий шаг.", reply_markup=MAIN_INLINE)
+        await answer_topic_safe(message, "С возвращением. Открой «📊 Моя страна» — там уже показана одна конкретная следующая цель, а не список из десятков команд.", reply_markup=MAIN_INLINE)
         return
     await animate(message, ["🌍 Добро пожаловать в ВПИ ГАВАНЬ…", "🗺️ Здесь ты строишь страну, развиваешь армию и влияешь на мир."])
     await answer_topic_safe(message,
-        "<b>Начинаем с одного шага:</b> напиши название реальной страны.\n\n"
+        "<b>Начинаем с одного шага:</b> выбери реальную страну.\n\n"
         "Пример: <code>/founding Бразилия</code>\n\n"
-        "После основания я покажу, что делать дальше.",
+        "Дальше будет только три первых действия: открыть страну, собрать ресурсы и построить первую ферму. Все остальные разделы можно оставить на потом.",
         reply_markup=MAIN_INLINE,
     )
 
@@ -631,7 +630,7 @@ async def cmd_founding(message: Message):
             return
 
     await answer_topic_safe(message,
-        f"Страна основана! 🎉\n\n{await format_country_summary(country)}",
+        f"Страна основана! 🎉\n\n{await format_country_summary(country)}\n\n<b>Порядок первого хода:</b> 1) открой «📊 Страна»; 2) нажми «📥 Сбор»; 3) построй ферму через «🏗️ Строить». Не нужно искать другие команды.",
         reply_markup=MAIN_INLINE,
     )
 
@@ -1308,9 +1307,6 @@ async def cmd_attack(message: Message):
                     mins, secs = remaining // 60, remaining % 60
                     await answer_topic_safe(message, f"⏳ Следующую атаку можно совершить через {mins} мин {secs} сек.")
                     return
-            if attacker_id in _war_inflight:
-                await answer_topic_safe(message, "⏳ Твоя предыдущая атака ещё обрабатывается ведущим. Дождись результата.")
-                return
             pending_id = await db.create_pending_war(
                 attacker_id, attacker["name"], defender_id, defender["name"],
                 action_text, int(time.time()), int(time.time()) + config.WAR_DEFENSE_WINDOW_SECONDS,
@@ -1336,95 +1332,6 @@ async def cmd_attack(message: Message):
             except Exception:
                 logger.info("Не удалось уведомить защитника о войне %s", pending_id, exc_info=True)
             return
-
-    # Запрос к ИИ намеренно вне локов — чтобы не держать блокировку обоих игроков
-    # на десятки секунд, пока ждём ответ модели.
-    try:
-        thinking_msg = await message.answer(
-            f"⚔️ Ведущий обдумывает исход столкновения с «{esc(defender['name'])}»..."
-        )
-        verdict = await ai.get_war_verdict(attacker, defender, action_text, world_context=world_context)
-    except Exception:
-        _war_inflight.discard(attacker_id)
-        raise
-    outcome = verdict.get("outcome", "error")
-    if outcome == "error":
-        _war_inflight.discard(attacker_id)
-        await thinking_msg.edit_text(esc(verdict.get("verdict_text", "⚠️ Не удалось получить вердикт от ИИ.")))
-        return
-
-    try:
-        async with first_lock:
-            async with second_lock:
-                current_attacker = await db.get_country(attacker_id)
-                current_defender = await db.get_country(defender_id)
-                if not current_attacker or not current_defender:
-                    await thinking_msg.edit_text("⚠️ Пока ведущий готовил вердикт, одна из стран была удалена. Результат не применён.")
-                    return
-                attacker, defender = current_attacker, current_defender
-                attacker_changes = clamp_country_changes(
-                    attacker, verdict.get("attacker_stat_changes", {})
-                )
-                defender_changes = clamp_country_changes(
-                    defender, verdict.get("defender_stat_changes", {})
-                )
-
-                loot_gold = loot_resources = 0
-                if outcome == "attacker_win":
-                    loot_gold = defender["gold"] * config.WAR_LOOT_PERCENT // 100
-                    loot_resources = defender["resources"] * config.WAR_LOOT_PERCENT // 100
-                elif outcome == "defender_win":
-                    loot_gold = -(attacker["gold"] * config.WAR_LOOT_PERCENT // 100)
-                    loot_resources = -(attacker["resources"] * config.WAR_LOOT_PERCENT // 100)
-
-                if outcome in ("attacker_win", "defender_win", "draw"):
-                    await db.apply_war_result(
-                        attacker_id, defender_id,
-                        attacker_changes, defender_changes,
-                        loot_gold=loot_gold, loot_resources=loot_resources,
-                    )
-
-                if outcome in ("attacker_win", "defender_win", "draw"):
-                    await db.log_war(
-                        attacker_id, attacker["name"], defender_id, defender["name"],
-                        action_text, outcome, verdict["verdict_text"],
-                    )
-                    await db.touch_last_attack(attacker_id, int(time.time()))
-    finally:
-        _war_inflight.discard(attacker_id)
-    outcome_text = {
-        "attacker_win": f"🏆 Победа {esc(attacker['name'])}!",
-        "defender_win": f"🛡️ {esc(defender['name'])} отстояла свои границы!",
-        "draw": "🤝 Ничья — обе стороны понесли потери, но не добились перевеса.",
-        "error": "⚠️ Не удалось получить вердикт от ИИ.",
-    }.get(outcome, "Исход неясен.")
-
-    def _fmt_changes(country_name: str, changes: dict) -> str:
-        lines = [f"<b>{esc(country_name)}:</b>"]
-        any_change = False
-        for stat, delta in changes.items():
-            if delta:
-                any_change = True
-                sign = "+" if delta > 0 else ""
-                lines.append(f"  {STAT_NAMES_RU.get(stat, stat)}: {sign}{delta}")
-        if not any_change:
-            lines.append("  без изменений")
-        return "\n".join(lines)
-
-    result_text = (
-        f"{outcome_text}\n\n"
-        f"{esc(verdict['verdict_text'])}\n\n"
-        f"<b>Изменения:</b>\n"
-        f"{_fmt_changes(attacker['name'], attacker_changes)}\n"
-        f"{_fmt_changes(defender['name'], defender_changes)}"
-    )
-    if loot_gold > 0 or loot_resources > 0:
-        result_text += f"\n\n💰 Трофеи {esc(attacker['name'])}: +{loot_gold} денег, +{loot_resources} ресурсов."
-    elif loot_gold < 0 or loot_resources < 0:
-        result_text += f"\n\n💰 Трофеи {esc(defender['name'])}: +{-loot_gold} денег, +{-loot_resources} ресурсов."
-
-    await thinking_msg.edit_text(result_text)
-
 
 @dp.message(Command("defend"))
 async def cmd_defend(message: Message):
@@ -1492,12 +1399,19 @@ async def cmd_defend(message: Message):
 @dp.message(Command("wars"))
 async def cmd_wars(message: Message):
     """/wars — ожидающие обороны и последние военные столкновения."""
-    pending = await db.list_pending_wars_for_defender(message.from_user.id)
+    pending_defense = await db.list_pending_wars_for_defender(message.from_user.id)
+    pending_attack = await db.list_pending_wars_for_attacker(message.from_user.id)
     wars = await db.get_recent_wars(10)
     lines = []
-    if pending:
+    if pending_attack:
+        lines.append("⚔️ <b>Твои незавершённые войны</b>")
+        for item in pending_attack:
+            state = "защитник готовит ответ" if item["status"] == "pending" else "ведущий готовит итог"
+            lines.append(f"Война #{item['id']} против <b>{esc(item['defender_name'])}</b> — {state}.")
+        lines.append("")
+    if pending_defense:
         lines.append("🛡️ <b>Войны, ожидающие твоей обороны</b>")
-        for item in pending:
+        for item in pending_defense:
             lines.append(
                 f"Атака #{item['id']} от <b>{esc(item['attacker_name'])}</b>\n"
                 f"Ответь: <code>/defend {item['id']} описание обороны</code>"
@@ -1643,17 +1557,18 @@ async def cmd_myid(message: Message):
 
 
 BEGINNER_GUIDE = (
-    "<b>🧭 Твой первый ход</b>\n\n"
-    "1. Создай государство: <code>/founding Название</code>\n"
-    "2. Нажми <b>📥 Сбор</b>, чтобы получить производство.\n"
-    "3. Открой <b>🏗️ Строить</b> и начни с фермы или шахты.\n"
-    "4. Проверяй <b>📈 Прогресс</b> — там указан следующий разумный шаг.\n\n"
-    "<b>Как работает развитие</b>\n"
-    "Строительство даёт производство. Сбор получает произведённые ресурсы. Очки развития улучшают характеристики. Резерв людей и деньги нужны для армии.\n\n"
-    "<b>Когда страна окрепнет</b>\n"
-    "Используй <code>/action описание</code>, чтобы провести политическое или экономическое решение. Для войны нужен <code>/attack user_id описание</code>. Исход оценивает ведущий ИИ, а не сама команда.\n\n"
-    "<b>Не нужно запоминать все команды</b>\n"
-    "Используй кнопки меню. Подробная информация находится в <b>📊 Страна</b>, цели — в <b>📈 Прогресс</b>, а дипломатия и новости — в разделе <b>☰ Ещё</b>."
+    "<b>🧭 Как играть без путаницы</b>\n\n"
+    "<b>Первые 10 минут</b>\n"
+    "1. Создай государство: <code>/founding Название</code>.\n"
+    "2. Открой «📊 Страна» и посмотри только строку «Следующий шаг».\n"
+    "3. Нажми «📥 Сбор», затем «🏗️ Строить» и начни с фермы.\n"
+    "4. Повтори сбор после таймера — производство превращается в деньги, ресурсы, еду и резерв людей.\n\n"
+    "<b>Что прокачивать дальше</b>\n"
+    "Экономика даёт деньги и ресурсы. Население и резерв людей позволяют мобилизовать армию. Военные базы определяют вместимость армии. Дипломатия, торговля и альянсы помогают не воевать в одиночку.\n\n"
+    "<b>Война</b>\n"
+    "Атака создаётся через <code>/attack user_id описание</code>, но вердикт не появляется сразу: защитник получает отдельное право на ответ через <code>/defend ID описание обороны</code>. В группе тексты ходов скрываются.\n\n"
+    "<b>Главное правило</b>\n"
+    "Не нужно запоминать команды. Открывай «📊 Страна», «📈 Прогресс» и «☰ Ещё»: каждый экран показывает один ближайший шаг. Таймер означает, что действие нужно повторить позже, а не что страна сломалась."
 )
 
 
@@ -2351,6 +2266,11 @@ async def _run_healthcheck_server():
 
 async def main():
     await db.init_db()
+    if not await db.check_integrity():
+        raise RuntimeError("SQLite integrity check failed; refusing to start with a corrupted database")
+    if os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"):
+        if not os.path.isabs(config.DB_PATH):
+            logger.warning("DB_PATH=%s is relative on Render; use a Persistent Disk path or external database to prevent data loss after redeploy", config.DB_PATH)
     if os.getenv("RENDER_WEB_SERVICE") == "1":
         await _run_healthcheck_server()
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())

@@ -245,6 +245,14 @@ async def _connect():
         yield db
 
 
+async def check_integrity() -> bool:
+    """Return whether SQLite reports a healthy database."""
+    async with _connect() as db:
+        cur = await db.execute("PRAGMA integrity_check")
+        row = await cur.fetchone()
+        return bool(row and row[0] == "ok")
+
+
 async def init_db():
     async with _connect() as db:
         await db.executescript(SCHEMA)
@@ -963,6 +971,16 @@ async def get_pending_war(war_id: int):
         cur = await db.execute("SELECT * FROM pending_wars WHERE id = ?", (war_id,))
         row = await cur.fetchone()
         return dict(row) if row else None
+
+
+async def list_pending_wars_for_attacker(attacker_id: int):
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM pending_wars WHERE attacker_id = ? AND status IN ('pending', 'resolving') ORDER BY id DESC",
+            (attacker_id,),
+        )
+        return [dict(row) for row in await cur.fetchall()]
 
 
 async def list_pending_wars_for_defender(defender_id: int):

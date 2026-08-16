@@ -9,6 +9,22 @@ import db
 import market
 
 
+def test_invalid_environment_values():
+    old_values = {key: os.environ.get(key) for key in ("BAD_INT", "BAD_FLOAT")}
+    try:
+        os.environ["BAD_INT"] = "-99"
+        os.environ["BAD_FLOAT"] = "not-a-number"
+        assert config._env_int("BAD_INT", 30) == 0
+        assert config._env_int("BAD_INT", 30, minimum=1) == 1
+        assert config._env_float("BAD_FLOAT", 1.5) == 1.5
+    finally:
+        for key, value in old_values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def test_market_zero_tick():
     old = config.MARKET_TICK_SECONDS
     try:
@@ -42,6 +58,7 @@ async def test_world_year_zero_duration():
 
 
 if __name__ == "__main__":
+    test_invalid_environment_values()
     test_market_zero_tick()
     asyncio.run(test_world_year_zero_duration())
     print("CONFIG_EDGE_CASES_OK")

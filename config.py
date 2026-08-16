@@ -3,6 +3,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
+    try:
+        return max(minimum, float(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
 # --- Telegram ---
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
@@ -114,25 +129,25 @@ MIN_NARRATIVE_LEN = 50
 
 # Глобальная защита от спама интерфейса. Она не заменяет игровые таймеры:
 # повтор одного сообщения режется отдельно от честных игровых действий.
-GLOBAL_MESSAGE_COOLDOWN_SECONDS = float(os.getenv("GLOBAL_MESSAGE_COOLDOWN_SECONDS", "1.5"))
+GLOBAL_MESSAGE_COOLDOWN_SECONDS = _env_float("GLOBAL_MESSAGE_COOLDOWN_SECONDS", 1.5)
 # Interface cards stay readable before automatic cleanup; set to 0 to disable.
-INTERFACE_MESSAGE_DELETE_SECONDS = max(0, int(os.getenv("INTERFACE_MESSAGE_DELETE_SECONDS", "30")))
-DUPLICATE_MESSAGE_WINDOW_SECONDS = float(os.getenv("DUPLICATE_MESSAGE_WINDOW_SECONDS", "4"))
-SPAM_BURST_WINDOW_SECONDS = float(os.getenv("SPAM_BURST_WINDOW_SECONDS", "10"))
-SPAM_BURST_LIMIT = int(os.getenv("SPAM_BURST_LIMIT", "8"))
+INTERFACE_MESSAGE_DELETE_SECONDS = _env_int("INTERFACE_MESSAGE_DELETE_SECONDS", 30)
+DUPLICATE_MESSAGE_WINDOW_SECONDS = _env_float("DUPLICATE_MESSAGE_WINDOW_SECONDS", 4)
+SPAM_BURST_WINDOW_SECONDS = _env_float("SPAM_BURST_WINDOW_SECONDS", 10)
+SPAM_BURST_LIMIT = _env_int("SPAM_BURST_LIMIT", 8, minimum=1)
 
 # Кулдаун между /action у одного игрока, в секундах (0 = выключен)
-ACTION_COOLDOWN_SECONDS = int(os.getenv("ACTION_COOLDOWN_SECONDS", str(10 * 60)))
-ATTACK_COOLDOWN_SECONDS = int(os.getenv("ATTACK_COOLDOWN_SECONDS", str(60 * 60)))
-WAR_DEFENSE_WINDOW_SECONDS = int(os.getenv("WAR_DEFENSE_WINDOW_SECONDS", str(24 * 60 * 60)))
-COLLECT_COOLDOWN_SECONDS = int(os.getenv("COLLECT_COOLDOWN_SECONDS", str(45 * 60)))
-BUILD_COOLDOWN_SECONDS = int(os.getenv("BUILD_COOLDOWN_SECONDS", "60"))
-UPGRADE_COOLDOWN_SECONDS = int(os.getenv("UPGRADE_COOLDOWN_SECONDS", str(10 * 60)))
-MOBILIZE_COOLDOWN_SECONDS = int(os.getenv("MOBILIZE_COOLDOWN_SECONDS", str(10 * 60)))
-BUY_COOLDOWN_SECONDS = int(os.getenv("BUY_COOLDOWN_SECONDS", str(60)))
-BASE_COOLDOWN_SECONDS = int(os.getenv("BASE_COOLDOWN_SECONDS", str(10 * 60)))
-POLICY_COOLDOWN_SECONDS = int(os.getenv("POLICY_COOLDOWN_SECONDS", str(30 * 60)))
-SPY_COOLDOWN_SECONDS = int(os.getenv("SPY_COOLDOWN_SECONDS", str(15 * 60)))
+ACTION_COOLDOWN_SECONDS = _env_int("ACTION_COOLDOWN_SECONDS", 10 * 60)
+ATTACK_COOLDOWN_SECONDS = _env_int("ATTACK_COOLDOWN_SECONDS", 60 * 60)
+WAR_DEFENSE_WINDOW_SECONDS = _env_int("WAR_DEFENSE_WINDOW_SECONDS", 24 * 60 * 60)
+COLLECT_COOLDOWN_SECONDS = _env_int("COLLECT_COOLDOWN_SECONDS", 45 * 60)
+BUILD_COOLDOWN_SECONDS = _env_int("BUILD_COOLDOWN_SECONDS", 60)
+UPGRADE_COOLDOWN_SECONDS = _env_int("UPGRADE_COOLDOWN_SECONDS", 10 * 60)
+MOBILIZE_COOLDOWN_SECONDS = _env_int("MOBILIZE_COOLDOWN_SECONDS", 10 * 60)
+BUY_COOLDOWN_SECONDS = _env_int("BUY_COOLDOWN_SECONDS", 60)
+BASE_COOLDOWN_SECONDS = _env_int("BASE_COOLDOWN_SECONDS", 10 * 60)
+POLICY_COOLDOWN_SECONDS = _env_int("POLICY_COOLDOWN_SECONDS", 30 * 60)
+SPY_COOLDOWN_SECONDS = _env_int("SPY_COOLDOWN_SECONDS", 15 * 60)
 
 # --- Постройки ---
 # Каждая постройка даёт прирост ресурса за один /collect, пропорционально уровню (level * amount_per_level).
