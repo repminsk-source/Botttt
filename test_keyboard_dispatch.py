@@ -60,11 +60,18 @@ def test_callback_handlers_registered():
     assert actual_build_callbacks == BUILD_CALLBACKS
     actual_pmc_callbacks = {
         button.callback_data
-        for row in bot.PMC_INLINE.inline_keyboard
+        for row in bot.PMC_COUNTRY_INLINE.inline_keyboard
         for button in row
         if button.callback_data
     }
     assert actual_pmc_callbacks == PMC_CALLBACKS
+    pmc_only_callbacks = {
+        button.callback_data
+        for row in bot.PMC_INLINE.inline_keyboard
+        for button in row
+        if button.callback_data
+    }
+    assert "mode:country" not in pmc_only_callbacks
 
 
 if __name__ == "__main__":

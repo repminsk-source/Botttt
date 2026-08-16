@@ -272,7 +272,11 @@ PMC_INLINE = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="👥 Набор", callback_data="pmc:recruit"), InlineKeyboardButton(text="💰 Бюджет", callback_data="pmc:fund")],
     [InlineKeyboardButton(text="⚔️ Операция", callback_data="pmc:action"), InlineKeyboardButton(text="📰 Новости", callback_data="pmc:news")],
     [InlineKeyboardButton(text="🌐 Организации", callback_data="pmc:list"), InlineKeyboardButton(text="📖 Правила", callback_data="pmc:help")],
-        [InlineKeyboardButton(text="🌍 Страна", callback_data="mode:country"), InlineKeyboardButton(text="⬅️ Разделы", callback_data="ui:more")],
+    [InlineKeyboardButton(text="⬅️ Разделы", callback_data="ui:more")],
+])
+PMC_COUNTRY_INLINE = InlineKeyboardMarkup(inline_keyboard=[
+    *PMC_INLINE.inline_keyboard[:-1],
+    [InlineKeyboardButton(text="🌍 Страна", callback_data="mode:country"), InlineKeyboardButton(text="⬅️ Разделы", callback_data="ui:more")],
 ])
 def callback_message(callback: CallbackQuery, text: str) -> Message:
     """Route a callback action under the clicker's identity, never the card author."""
@@ -1873,6 +1877,9 @@ async def menu_country(message: Message):
 
 @dp.message(F.text.in_({"📖 Что делать?", "📖 Помощь"}))
 async def menu_guide(message: Message):
+    if await db.get_pmc_by_owner(message.from_user.id):
+        await cmd_pmc_help(message)
+        return
     await cmd_guide(message)
 
 
@@ -1945,6 +1952,7 @@ async def menu_more(message: Message):
 
 async def render_pmc_dashboard(message: Message, owner_id: int | None = None):
     pmc = await db.get_pmc_by_owner(message.from_user.id)
+    has_country = await db.get_country(message.from_user.id) is not None
     if not pmc:
         text = (
             "🏴 <b>Центр ЧВК</b>\n\n"
@@ -1981,9 +1989,8 @@ async def render_pmc_dashboard(message: Message, owner_id: int | None = None):
             "<b>Разделы меню:</b> профиль показывает состояние организации; бюджет и набор развивают ресурсы; заказы дают работу; операция нужна для военного RP; новости формируют публичную историю.\n\n"
             "Статистика ЧВК и страны хранится отдельно. Для перехода к стране нажми «🌍 Страна»."
         )
-    await answer_topic_safe(message, text, reply_markup=PMC_INLINE, owner_id=owner_id)
-
-
+    markup = PMC_COUNTRY_INLINE if has_country else PMC_INLINE
+    await answer_topic_safe(message, text, reply_markup=markup, owner_id=owner_id)
 @dp.message(F.text == "🏴 ЧВК")
 async def menu_pmc(message: Message):
     await render_pmc_dashboard(message)
@@ -2192,6 +2199,9 @@ async def callback_diplomacy(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "ui:guide")
 async def callback_guide(callback: CallbackQuery):
+    if await db.get_pmc_by_owner(callback.from_user.id):
+        await finish_callback(callback, "/pmc_help", cmd_pmc_help, PMC_INLINE)
+        return
     await finish_callback(callback, "/guide", cmd_guide, MAIN_INLINE)
 
 
@@ -3005,6 +3015,9 @@ async def cmd_pmc_sanction(message: Message):
 
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
+    if await db.get_pmc_by_owner(message.from_user.id) and not await db.get_country(message.from_user.id):
+        await cmd_pmc_help(message)
+        return
     text = BEGINNER_GUIDE
     if message.chat.type in ("group", "supergroup"):
         text += (
