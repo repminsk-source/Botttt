@@ -8,6 +8,19 @@ from config import (
 )
 
 
+def _provider_error_text(error: Exception | None) -> str:
+    """Turn common provider failures into safe, actionable Russian diagnostics."""
+    detail = _safe_error(error)
+    lowered = detail.casefold()
+    if "requires a subscription" in lowered or "upgrade for access" in lowered:
+        return "Ollama не разрешает выбранную модель на текущем тарифе. Укажи доступную модель через OLLAMA_MODEL или подключи подходящую подписку."
+    if "ollama http 403" in lowered or "forbidden" in lowered:
+        return "Ollama отклонил доступ к модели (HTTP 403). Проверь API-ключ, тариф и значение OLLAMA_MODEL в Render."
+    if "ollama_api_key" in lowered and ("не задан" in lowered or "missing" in lowered):
+        return "OLLAMA_API_KEY не задан в Render Environment. Добавь действующий ключ Ollama Cloud и перезапусти Worker."
+    return detail
+
+
 def _safe_error(error: Exception | None) -> str:
     """Return diagnostics without leaking query-string keys or bearer tokens."""
     if isinstance(error, json.JSONDecodeError):
@@ -478,7 +491,7 @@ async def get_verdict(country: dict, action_text: str, world_context: str = "") 
     # Оба провайдера упали, либо ответ не распарсился — возвращаем нейтральный вердикт руками
     return {
         "success": "error",
-        "verdict_text": f"⚠️ Не удалось получить вердикт от ИИ. Ошибка: {_safe_error(error)}",
+        "verdict_text": f"⚠️ Не удалось получить вердикт от ИИ. Причина: {_provider_error_text(error)}",
         "stat_changes": {"economy": 0, "military": 0, "population": 0, "tech": 0, "diplomacy": 0},
     }
 
@@ -507,7 +520,7 @@ async def get_war_verdict(attacker: dict, defender: dict, action_text: str, worl
 
     return {
         "outcome": "error",
-        "verdict_text": f"⚠️ Не удалось получить вердикт от ИИ. Ошибка: {_safe_error(error)}",
+        "verdict_text": f"⚠️ Не удалось получить вердикт от ИИ. Причина: {_provider_error_text(error)}",
         "attacker_stat_changes": {"economy": 0, "military": 0, "population": 0, "tech": 0, "diplomacy": 0},
         "defender_stat_changes": {"economy": 0, "military": 0, "population": 0, "tech": 0, "diplomacy": 0},
     }
@@ -537,7 +550,7 @@ async def get_nuke_verdict(attacker: dict, defender: dict, action_text: str, wor
     fallback_attacker = {"economy": -2, "military": 0, "population": 0, "tech": 0, "diplomacy": -5}
     return {
         "verdict_text": (
-            f"⚠️ ИИ недоступен, но ядерный удар применён — урон рассчитан по резервной формуле. Ошибка: {_safe_error(error)}"
+            f"⚠️ ИИ недоступен, но ядерный удар применён — урон рассчитан по резервной формуле. Причина: {_provider_error_text(error)}"
         ),
         "attacker_stat_changes": fallback_attacker,
         "defender_stat_changes": fallback_defender,

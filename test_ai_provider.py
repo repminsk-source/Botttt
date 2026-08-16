@@ -81,6 +81,13 @@ async def test_explicit_fallback_order():
         ai._call_ollama, ai._call_grok = old_ollama, old_grok
 
 
+async def test_provider_error_messages_are_actionable():
+    subscription = ai._provider_error_text(RuntimeError("Ollama HTTP 403: this model requires a subscription, upgrade for access"))
+    assert "тариф" in subscription and "OLLAMA_MODEL" in subscription
+    auth = ai._provider_error_text(RuntimeError("Client error 403 Forbidden"))
+    assert "API-ключ" in auth and "тариф" in auth
+
+
 async def test_cloud_http_error_is_descriptive():
     old_enabled, old_base, old_key, old_model = ai.OLLAMA_ENABLED, ai.OLLAMA_BASE_URL, ai.OLLAMA_API_KEY, ai.OLLAMA_MODEL
     class FakeResponse:
@@ -134,6 +141,7 @@ async def test_cloud_requires_api_key():
 
 
 if __name__ == "__main__":
+    asyncio.run(test_provider_error_messages_are_actionable())
     asyncio.run(test_cloud_requires_api_key())
     asyncio.run(test_ollama_primary_only())
     asyncio.run(test_explicit_fallback_order())
