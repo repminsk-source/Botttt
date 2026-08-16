@@ -17,7 +17,7 @@ expected = {
     "market", "buy", "build_base", "spy", "attack", "defend", "wars", "action", "year", "news",
     "myid", "guide", "policy", "history", "alliances", "alliance_create", "alliance_join",
     "alliance_leave", "alliance_info", "trade", "trade_offer", "trade_accept", "trade_reject",
-    "world", "set_year", "seed_alliances", "give_points", "set_stat", "kick", "transfer", "help",
+    "world", "set_year", "seed_alliances", "give_points", "set_stat", "kick", "transfer", "help", "premium", "premium_grant",
 }
 missing = expected - set(commands)
 assert command_start, "missing CommandStart handler"
@@ -28,7 +28,7 @@ import db
 required_db = [
     "apply_upgrade", "apply_base", "apply_spy_operation", "apply_collect", "apply_purchase",
     "apply_mobilization", "apply_action_result", "apply_war_result", "create_pending_war", "get_pending_war", "list_pending_wars_for_attacker", "claim_pending_war", "reset_pending_war", "complete_pending_war", "create_world_event",
-    "get_world_events", "get_latest_world_event_created_at", "create_trade_contract", "accept_trade_contract", "reject_trade_contract",
+    "get_world_events", "get_latest_world_event_created_at", "get_premium_balance", "get_premium_items", "grant_premium", "purchase_premium", "consume_premium_item", "create_trade_contract", "accept_trade_contract", "reject_trade_contract",
     "create_alliance", "join_alliance", "leave_alliance", "transfer_country", "delete_country",
 ]
 missing_db = [name for name in required_db if not hasattr(db, name)]

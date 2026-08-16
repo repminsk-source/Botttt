@@ -23,7 +23,7 @@ def test_command_handlers_are_unique_and_present():
         "cmd_alliance_join", "cmd_alliance_leave", "cmd_alliance_info", "cmd_trade",
         "cmd_trade_offer", "cmd_trade_accept", "cmd_trade_reject", "cmd_world", "cmd_help",
         "cmd_set_year", "cmd_seed_alliances", "cmd_give_points", "cmd_set_stat", "cmd_kick",
-        "cmd_transfer",
+        "cmd_transfer", "cmd_premium", "cmd_premium_grant",
     }
     assert required.issubset(set(callbacks))
 

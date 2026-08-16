@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS countries (
     military_bases INTEGER NOT NULL DEFAULT 0,
     warheads INTEGER NOT NULL DEFAULT 0,
     territory_tier TEXT NOT NULL DEFAULT 'medium',
+    territory INTEGER NOT NULL DEFAULT 100000,
     created_at INTEGER NOT NULL,
     last_action_at INTEGER NOT NULL DEFAULT 0,
     last_collect_at INTEGER NOT NULL DEFAULT 0,
@@ -165,6 +166,30 @@ CREATE TABLE IF NOT EXISTS pending_wars (
     status TEXT NOT NULL DEFAULT 'pending',
     defense_text TEXT
 );
+
+CREATE TABLE IF NOT EXISTS premium_wallets (
+    user_id INTEGER PRIMARY KEY,
+    balance INTEGER NOT NULL DEFAULT 0 CHECK(balance >= 0),
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS premium_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    delta INTEGER NOT NULL,
+    balance_after INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    actor_id INTEGER,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS premium_items (
+    user_id INTEGER NOT NULL,
+    item_key TEXT NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 0 CHECK(quantity >= 0),
+    expires_at INTEGER,
+    PRIMARY KEY (user_id, item_key)
+);
 """
 
 # Колонки, которые могли отсутствовать в базах, созданных до этого обновления.
@@ -189,6 +214,7 @@ MIGRATIONS = [
     "ALTER TABLE countries ADD COLUMN oil INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE countries ADD COLUMN military_bases INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE countries ADD COLUMN territory_tier TEXT NOT NULL DEFAULT 'medium'",
+    "ALTER TABLE countries ADD COLUMN territory INTEGER NOT NULL DEFAULT 100000",
     "ALTER TABLE countries ADD COLUMN last_spy_at INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE countries ADD COLUMN uranium INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE countries ADD COLUMN warheads INTEGER NOT NULL DEFAULT 0",
@@ -349,6 +375,76 @@ async def get_all_countries():
         cur = await db.execute("SELECT * FROM countries ORDER BY (economy+military+population+tech+diplomacy) DESC")
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+
+async def get_premium_balance(user_id: int) -> int:
+    async with _connect() as db:
+        cur = await db.execute("SELECT balance FROM premium_wallets WHERE user_id = ?", (user_id,))
+        row = await cur.fetchone()
+        return int(row[0] if row else 0)
+
+
+async def get_premium_items(user_id: int) -> dict[str, int]:
+    now = int(time.time())
+    async with _connect() as db:
+        cur = await db.execute(
+            "SELECT item_key, quantity FROM premium_items WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?)",
+            (user_id, now),
+        )
+        return {str(row[0]): int(row[1]) for row in await cur.fetchall() if int(row[1]) > 0}
+
+
+async def grant_premium(user_id: int, amount: int, reason: str, actor_id: int | None = None) -> bool:
+    if amount <= 0 or not reason.strip():
+        return False
+    now = int(time.time())
+    async with _connect() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        await db.execute("INSERT OR IGNORE INTO premium_wallets(user_id, balance, updated_at) VALUES (?, 0, ?)", (user_id, now))
+        await db.execute("UPDATE premium_wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ?", (amount, now, user_id))
+        cur = await db.execute("SELECT balance FROM premium_wallets WHERE user_id = ?", (user_id,))
+        row = await cur.fetchone()
+        await db.execute("INSERT INTO premium_ledger(user_id, delta, balance_after, reason, actor_id, created_at) VALUES (?, ?, ?, ?, ?, ?)", (user_id, amount, int(row[0]), reason.strip(), actor_id, now))
+        await db.commit()
+        return True
+
+
+async def purchase_premium(user_id: int, item_key: str, cost: int, reason: str, quantity: int = 1, expires_at: int | None = None) -> bool:
+    if cost <= 0 or quantity <= 0 or not item_key or not reason.strip():
+        return False
+    now = int(time.time())
+    async with _connect() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        await db.execute("INSERT OR IGNORE INTO premium_wallets(user_id, balance, updated_at) VALUES (?, 0, ?)", (user_id, now))
+        cur = await db.execute("UPDATE premium_wallets SET balance = balance - ?, updated_at = ? WHERE user_id = ? AND balance >= ?", (cost, now, user_id, cost))
+        if cur.rowcount != 1:
+            await db.rollback()
+            return False
+        if item_key == "territory_expansion":
+            await db.execute("UPDATE countries SET territory = territory + 5000 WHERE user_id = ?", (user_id,))
+        await db.execute(
+            "INSERT INTO premium_items(user_id, item_key, quantity, expires_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id, item_key) DO UPDATE SET quantity = quantity + excluded.quantity, expires_at = excluded.expires_at",
+            (user_id, item_key, quantity, expires_at),
+        )
+        cur = await db.execute("SELECT balance FROM premium_wallets WHERE user_id = ?", (user_id,))
+        row = await cur.fetchone()
+        await db.execute("INSERT INTO premium_ledger(user_id, delta, balance_after, reason, actor_id, created_at) VALUES (?, ?, ?, ?, ?, ?)", (user_id, -cost, int(row[0]), reason.strip(), user_id, now))
+        await db.commit()
+        return True
+
+
+async def consume_premium_item(user_id: int, item_key: str, quantity: int = 1) -> bool:
+    if quantity <= 0 or not item_key:
+        return False
+    now = int(time.time())
+    async with _connect() as db:
+        cur = await db.execute(
+            "UPDATE premium_items SET quantity = quantity - ? WHERE user_id = ? AND item_key = ? AND quantity >= ? AND (expires_at IS NULL OR expires_at > ?)",
+            (quantity, user_id, item_key, quantity, now),
+        )
+        await db.commit()
+        return cur.rowcount == 1
 
 
 async def update_stat(user_id: int, stat: str, delta: int):

@@ -127,6 +127,17 @@ MAX_MOBILIZE_PER_ACTION = 50
 MAX_ACTION_LEN = 1500
 MIN_NARRATIVE_LEN = 50
 
+# Внутриигровая премиальная валюта; это не реальные деньги и не WorldCoin.
+PREMIUM_CURRENCY_NAME = "Гаванские кредиты"
+PREMIUM_CURRENCY_SHORT = "ГК"
+PREMIUM_SHOP = {
+    "luck_boost": {"name": "Буст удачи", "cost": 10, "description": "+50% к следующему сбору", "quantity": 1},
+    "territory_expansion": {"name": "Расширение территории", "cost": 50, "description": "+5 000 территории", "quantity": 1},
+    "wipe_protection": {"name": "Защита от вайпа", "cost": 200, "description": "одна защита при сбросе мира", "quantity": 1},
+    "premium_status": {"name": "Премиальный статус", "cost": 150, "description": "особый статус страны на 7 дней", "quantity": 1},
+}
+
+
 # Глобальная защита от спама интерфейса. Она не заменяет игровые таймеры:
 # повтор одного сообщения режется отдельно от честных игровых действий.
 GLOBAL_MESSAGE_COOLDOWN_SECONDS = _env_float("GLOBAL_MESSAGE_COOLDOWN_SECONDS", 1.5)

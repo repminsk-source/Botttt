@@ -218,7 +218,16 @@ MORE_INLINE = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="📰 Мои новости", callback_data="ui:news"), InlineKeyboardButton(text="🌎 Мир", callback_data="ui:world")],
     [InlineKeyboardButton(text="📜 Торговля", callback_data="ui:trade"), InlineKeyboardButton(text="🌍 Рейтинг", callback_data="ui:top")],
     [InlineKeyboardButton(text="🏛️ Политика", callback_data="ui:policy"), InlineKeyboardButton(text="🤝 Дипломатия", callback_data="ui:diplomacy")],
-    [InlineKeyboardButton(text="📖 Помощь", callback_data="ui:guide"), InlineKeyboardButton(text="⬅️ Назад", callback_data="ui:back")],
+    [InlineKeyboardButton(text="💎 Магазин", callback_data="ui:premium"), InlineKeyboardButton(text="📖 Помощь", callback_data="ui:guide")],
+    [InlineKeyboardButton(text="⬅️ Назад", callback_data="ui:back")],
+])
+
+PREMIUM_INLINE = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="⚡ Буст удачи", callback_data="premium:buy:luck_boost")],
+    [InlineKeyboardButton(text="🗺️ Территория", callback_data="premium:buy:territory_expansion")],
+    [InlineKeyboardButton(text="🛡️ Защита от вайпа", callback_data="premium:buy:wipe_protection")],
+    [InlineKeyboardButton(text="🏅 Премиальный статус", callback_data="premium:buy:premium_status")],
+    [InlineKeyboardButton(text="⬅️ Ещё", callback_data="ui:more")],
 ])
 
 BUILD_INLINE = InlineKeyboardMarkup(inline_keyboard=[
@@ -536,8 +545,14 @@ async def format_country_summary(c: dict) -> str:
     next_step = next_step_hint(c, buildings)
     alliance = await db.get_user_alliance(c["user_id"])
     alliance_line = f" · 🤝 {esc(alliance['tag'])}" if alliance else ""
+    premium_items = await db.get_premium_items(c["user_id"])
+    premium_line = ""
+    if premium_items.get("premium_status", 0):
+        premium_line += "\n🏅 Премиальный статус активен"
+    if premium_items.get("wipe_protection", 0):
+        premium_line += f"\n🛡️ Заряды защиты от вайпа: {premium_items['wipe_protection']}"
     return (
-        f"🏳️ <b>{esc(c['name'])}</b>{alliance_line}\n"
+        f"🏳️ <b>{esc(c['name'])}</b>{alliance_line}{premium_line}\n"
         f"Этап: <b>{esc(stage_name)}</b> · очки: <b>{progress['score']}</b>\n\n"
         f"💰 <b>{c['gold']:,}</b> денег  ·  📦 <b>{c['resources']:,}</b> ресурсов\n"
         f"👥 <b>{c['population']:,}</b> населения  ·  ⚔️ <b>{c['military']:,}</b> армии\n"
@@ -913,6 +928,10 @@ async def cmd_collect(message: Message):
         policy = config.POLICY_DEFINITIONS.get(country.get("policy", "development"), config.POLICY_DEFINITIONS["development"])
         policy_multiplier = policy["production_multiplier"]
         gains = {resource: max(1, int(amount * policy_multiplier)) for resource, amount in gains.items()}
+        premium_items = await db.get_premium_items(message.from_user.id)
+        luck_boost_used = premium_items.get("luck_boost", 0) > 0
+        if luck_boost_used:
+            gains = {resource: max(1, int(amount * 1.5)) for resource, amount in gains.items()}
         if country.get("policy") == "welfare":
             for resource in ("food", "water"):
                 if resource in gains:
@@ -958,6 +977,8 @@ async def cmd_collect(message: Message):
         if not applied:
             await answer_topic_safe(message, "Состояние страны изменилось во время сбора. Повтори команду.")
             return
+        if luck_boost_used:
+            await db.consume_premium_item(message.from_user.id, "luck_boost")
 
     lines = ["📥 <b>Сбор ресурсов</b>\n"]
     any_gain = False
@@ -969,6 +990,8 @@ async def cmd_collect(message: Message):
         lines.append("Построек пока нет — используй /build чтобы начать что-то производить.")
     if is_first_collect:
         lines.append(f"🎁 Стартовый сбор: +{config.FIRST_COLLECT_GOLD_BONUS:,} денег")
+    if luck_boost_used:
+        lines.append("⚡ Буст удачи применён: доход увеличен на 50%.")
     if economy_growth > 0:
         lines.append(f"💰 Экономика: +{economy_growth} (от развития построек)")
     if population_growth > 0:
@@ -1753,6 +1776,38 @@ async def callback_top(callback: CallbackQuery):
     await finish_callback(callback, "/top", cmd_top)
 
 
+async def render_premium_shop(message: Message, owner_id: int | None = None):
+    balance = await db.get_premium_balance(owner_id or message.from_user.id)
+    items = await db.get_premium_items(owner_id or message.from_user.id)
+    lines = [f"💎 <b>Магазин за {config.PREMIUM_CURRENCY_NAME}</b>", "", f"Баланс: <b>{balance:,} {config.PREMIUM_CURRENCY_SHORT}</b>", "", "Покупки дают игровые эффекты и списываются атомарно.", ""]
+    for key, item in config.PREMIUM_SHOP.items():
+        owned = items.get(key, 0)
+        lines.append(f"{item['name']} — <b>{item['cost']} {config.PREMIUM_CURRENCY_SHORT}</b>\n{item['description']} · у тебя: {owned}")
+    await answer_topic_safe(message, "\n".join(lines), reply_markup=PREMIUM_INLINE, owner_id=owner_id)
+
+
+@dp.callback_query(F.data == "ui:premium")
+async def callback_premium(callback: CallbackQuery):
+    await callback.answer()
+    await render_premium_shop(callback.message, owner_id=callback.from_user.id)
+
+
+@dp.callback_query(F.data.startswith("premium:buy:"))
+async def callback_premium_buy(callback: CallbackQuery):
+    await callback.answer()
+    item_key = callback.data.split(":", 2)[2]
+    item = config.PREMIUM_SHOP.get(item_key)
+    if not item:
+        await answer_topic_safe(callback.message, "Товар больше недоступен.", reply_markup=PREMIUM_INLINE, owner_id=callback.from_user.id)
+        return
+    expires_at = int(time.time()) + 7 * 86400 if item_key == "premium_status" else None
+    ok = await db.purchase_premium(callback.from_user.id, item_key, item["cost"], f"Покупка: {item['name']}", item.get("quantity", 1), expires_at)
+    if not ok:
+        await answer_topic_safe(callback.message, f"Недостаточно {config.PREMIUM_CURRENCY_NAME} или страна не зарегистрирована.", reply_markup=PREMIUM_INLINE, owner_id=callback.from_user.id)
+        return
+    await answer_topic_safe(callback.message, f"✅ Куплено: <b>{item['name']}</b>. Эффект: {item['description']}", reply_markup=PREMIUM_INLINE, owner_id=callback.from_user.id)
+
+
 @dp.callback_query(F.data == "ui:world")
 async def callback_world(callback: CallbackQuery):
     await callback.answer()
@@ -2101,6 +2156,31 @@ async def cmd_seed_alliances(message: Message):
     if skipped:
         text += f"⏭️ Уже существовали: {', '.join(skipped)}\n"
     await answer_topic_safe(message, text or "Список канонических альянсов пуст.")
+
+
+@dp.message(Command("premium_grant"))
+async def cmd_premium_grant(message: Message):
+    """Выдать Гаванские кредиты: /premium_grant user_id количество причина"""
+    if not is_admin(message.from_user.id):
+        await answer_topic_safe(message, "Команда только для админов.")
+        return
+    parts = message.text.split(maxsplit=3)
+    if len(parts) < 3 or not parts[1].isdigit() or not parts[2].isdigit() or int(parts[2]) <= 0:
+        await answer_topic_safe(message, "Формат: <code>/premium_grant user_id количество причина</code>")
+        return
+    user_id, amount = int(parts[1]), int(parts[2])
+    if not await db.get_country(user_id):
+        await answer_topic_safe(message, "У этого user_id нет страны.")
+        return
+    reason = parts[3].strip() if len(parts) == 4 else "Административная выдача"
+    await db.grant_premium(user_id, amount, reason, message.from_user.id)
+    balance = await db.get_premium_balance(user_id)
+    await answer_topic_safe(message, f"✅ Игроку {user_id} выдано {amount} {config.PREMIUM_CURRENCY_SHORT}. Баланс: {balance}.")
+
+
+@dp.message(Command("premium"))
+async def cmd_premium(message: Message):
+    await render_premium_shop(message, owner_id=message.from_user.id)
 
 
 @dp.message(Command("give_points"))
