@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+own_model/checkpoints/
+*.pt
+*.pth
