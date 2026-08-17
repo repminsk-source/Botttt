@@ -28,6 +28,7 @@ from config import (
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS countries (
     user_id INTEGER PRIMARY KEY,
+    username TEXT,
     chat_id INTEGER,
     name TEXT NOT NULL,
     economy INTEGER NOT NULL,
@@ -345,6 +346,7 @@ MIGRATIONS = [
     "ALTER TABLE countries ADD COLUMN real_gdp_usd REAL",
     "ALTER TABLE countries ADD COLUMN real_gdp_per_capita_usd REAL",
     "ALTER TABLE countries ADD COLUMN real_life_expectancy REAL",
+    "ALTER TABLE countries ADD COLUMN username TEXT",
     "ALTER TABLE pmcs ADD COLUMN last_action_at INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE pmcs ADD COLUMN last_collect_at INTEGER NOT NULL DEFAULT 0",
 ]
@@ -413,6 +415,10 @@ async def init_db():
                 # иначе Render продолжит работу с неполной схемой.
                 if "duplicate column name" not in str(exc).lower():
                     raise
+        try:
+            await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_countries_username_nocase ON countries(username COLLATE NOCASE) WHERE username IS NOT NULL AND username <> ''")
+        except aiosqlite.IntegrityError:
+            logger.warning("Не удалось создать уникальный индекс username: в legacy базе есть дубликаты")
         cur = await db.execute("SELECT COUNT(*) FROM world_events")
         if (await cur.fetchone())[0] == 0:
             await db.execute(
@@ -422,7 +428,7 @@ async def init_db():
         await db.commit()
 
 
-async def create_country(user_id: int, chat_id: int, name: str, territory_tier: str = "medium", profile: dict | None = None):
+async def create_country(user_id: int, chat_id: int, name: str, territory_tier: str = "medium", profile: dict | None = None, username: str | None = None):
     async with _connect() as db:
         cur = await db.execute("SELECT name FROM countries")
         existing_names = await cur.fetchall()
@@ -431,18 +437,18 @@ async def create_country(user_id: int, chat_id: int, name: str, territory_tier: 
         now = int(time.time())
         cur = await db.execute(
             """INSERT OR IGNORE INTO countries
-               (user_id, chat_id, name, economy, military, population, tech, diplomacy,
+               (user_id, username, chat_id, name, economy, military, population, tech, diplomacy,
                 points, gold, resources, manpower, water, food, wood, military_bases, territory_tier,
                 created_at, last_action_at, last_collect_at, iso_code, data_year,
                 real_population, real_gdp_usd, real_gdp_per_capita_usd, real_life_expectancy)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)""",
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?)""",
             (
-                user_id, chat_id, name,
+                user_id, normalize_username(username), chat_id, name,
                 START_STATS["economy"], START_STATS["military"],
                 (profile or {}).get("game_population", START_STATS["population"]),
                 START_STATS["tech"], START_STATS["diplomacy"],
                 START_GOLD, START_RESOURCES, START_MANPOWER, START_WATER, START_FOOD,
-                START_WOOD, START_MILITARY_BASES, territory_tier, now, 0,
+                START_WOOD, START_MILITARY_BASES, territory_tier, now,
                 (profile or {}).get("iso_code"), (profile or {}).get("selected_year"),
                 (profile or {}).get("population"), (profile or {}).get("gdp_usd"),
                 (profile or {}).get("gdp_per_capita_usd"), (profile or {}).get("life_expectancy"),
@@ -488,6 +494,37 @@ async def get_country(user_id: int):
     async with _connect() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM countries WHERE user_id = ?", (user_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+def normalize_username(username: str | None) -> str | None:
+    value = str(username or "").strip().lstrip("@").casefold()
+    return value or None
+
+
+async def update_country_username(user_id: int, username: str | None) -> bool:
+    normalized = normalize_username(username)
+    if not normalized:
+        return False
+    async with _connect() as db:
+        try:
+            cur = await db.execute("UPDATE countries SET username = ? WHERE user_id = ?", (normalized, user_id))
+            await db.commit()
+            return cur.rowcount == 1
+        except aiosqlite.IntegrityError:
+            await db.rollback()
+            logger.warning("Username %s is already linked to another country", normalized)
+            return False
+
+
+async def get_country_by_username(username: str):
+    normalized = normalize_username(username)
+    if not normalized:
+        return None
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM countries WHERE username = ? COLLATE NOCASE", (normalized,))
         row = await cur.fetchone()
         return dict(row) if row else None
 
@@ -973,7 +1010,7 @@ async def delete_country(user_id: int) -> bool:
         return cur.rowcount > 0
 
 
-async def transfer_country(old_user_id: int, new_user_id: int, new_chat_id: int | None = None) -> bool:
+async def transfer_country(old_user_id: int, new_user_id: int, new_chat_id: int | None = None, new_username: str | None = None) -> bool:
     """
     Передаёт страну от одного telegram-пользователя другому. Возвращает True при успехе.
     Если у нового user_id уже есть своя страна — операция отклоняется (False).
@@ -988,13 +1025,13 @@ async def transfer_country(old_user_id: int, new_user_id: int, new_chat_id: int 
             return False
         if new_chat_id is not None:
             await db.execute(
-                "UPDATE countries SET user_id = ?, chat_id = ? WHERE user_id = ?",
-                (new_user_id, new_chat_id, old_user_id),
+                "UPDATE countries SET user_id = ?, username = ?, chat_id = ? WHERE user_id = ?",
+                (new_user_id, normalize_username(new_username), new_chat_id, old_user_id),
             )
         else:
             await db.execute(
-                "UPDATE countries SET user_id = ? WHERE user_id = ?",
-                (new_user_id, old_user_id),
+                "UPDATE countries SET user_id = ?, username = ? WHERE user_id = ?",
+                (new_user_id, normalize_username(new_username), old_user_id),
             )
         await db.execute("UPDATE buildings SET user_id = ? WHERE user_id = ?", (new_user_id, old_user_id))
         await db.execute("UPDATE events SET user_id = ? WHERE user_id = ?", (new_user_id, old_user_id))

@@ -51,6 +51,8 @@ class RegistrationGateMiddleware(BaseMiddleware):
 
     async def __call__(self, handler, event, data):
         user = getattr(event, "from_user", None)
+        if user is not None and getattr(user, "username", None):
+            await db.update_country_username(user.id, user.username)
         if user is None or is_admin(user.id):
             return await handler(event, data)
         if getattr(event, "new_chat_members", None):
@@ -158,6 +160,31 @@ def command_payload(message: Message) -> str:
     text = (message.text or "").strip()
     parts = text.split(maxsplit=1)
     return parts[1].strip() if len(parts) == 2 else ""
+
+
+def normalize_player_username(value: str | None) -> str | None:
+    """Normalize a public Telegram username for user-facing target commands."""
+    value = str(value or "").strip()
+    if value.startswith("@"):
+        value = value[1:]
+    if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", value):
+        return None
+    return value.casefold()
+
+
+async def resolve_country_target(value: str | None):
+    """Resolve a player-facing @username to a country while keeping IDs internal."""
+    username = normalize_player_username(value)
+    if not username:
+        return None
+    return await db.get_country_by_username(username)
+
+
+def player_label(country: dict | None, fallback: str = "игрок") -> str:
+    """Return a public label without exposing a numeric Telegram ID."""
+    if country and country.get("username"):
+        return "@" + str(country["username"]).lstrip("@")
+    return fallback
 
 
 def _interface_key(message: Message, owner_id: int | None = None) -> tuple[int, int, int]:
@@ -793,7 +820,7 @@ async def cmd_founding(message: Message):
         tier = territory.get_tier(canonical)
         profile = world_data.get_profile(canonical, config.START_DATA_YEAR)
         # Фактическое население хранится отдельно; игровое население начинается с нуля.
-        created = await db.create_country(message.from_user.id, message.chat.id, canonical, tier, profile)
+        created = await db.create_country(message.from_user.id, message.chat.id, canonical, tier, profile, message.from_user.username)
         if not created:
             await answer_topic_safe(message, f"«{esc(canonical)}» уже занята другим игроком. Выбери другую страну.")
             return
@@ -803,7 +830,7 @@ async def cmd_founding(message: Message):
             return
 
     await answer_topic_safe(message,
-        f"Страна основана! 🎉\n\n{await format_country_summary(country)}\n\n<b>Порядок первого хода:</b> 1) открой «📊 Страна»; 2) нажми «📥 Сбор»; 3) построй ферму через «🏗️ Строить». Не нужно искать другие команды.\n\n<b>🏴 Как зарегистрироваться за ЧВК</b>\n1. Создай организацию: <code>/pmc_create Название</code>.\n2. Проверь профиль: <code>/pmc_profile</code>.\n3. Набери сотрудников: <code>/pmc_recruit количество</code> — максимум 2 500 за набор, КД 6 часов.\n4. Найди заказ: <code>/pmc_list</code>.\n5. Если у тебя есть страна, она может добровольно профинансировать ЧВК: <code>/pmc_fund сумма</code>.\n6. Отправь анонимное предложение: <code>/pmc_request ID описание</code>.\n\nСтрана-заказчик скрыта от обычных игроков. Для принятия заказа ЧВК использует <code>/pmc_requests</code> и <code>/pmc_accept номер</code>.",
+        f"Страна основана! 🎉\n\n{await format_country_summary(country)}\n\n<b>Порядок первого хода:</b> 1) открой «📊 Страна»; 2) нажми «📥 Сбор»; 3) построй ферму через «🏗️ Строить». Не нужно искать другие команды.\n\n<b>🏴 Как зарегистрироваться за ЧВК</b>\n1. Создай организацию: <code>/pmc_create Название</code>.\n2. Проверь профиль: <code>/pmc_profile</code>.\n3. Набери сотрудников: <code>/pmc_recruit количество</code> — максимум 2 500 за набор, КД 6 часов.\n4. Найди заказ: <code>/pmc_list</code>.\n5. Если у тебя есть страна, она может добровольно профинансировать ЧВК: <code>/pmc_fund сумма</code>.\n6. Отправь анонимное предложение в выбранную организацию: <code>/pmc_request ID организации описание</code>. ID здесь относится к ЧВК, а не к Telegram-пользователю.\n\nСтрана-заказчик скрыта от обычных игроков. Для принятия заказа ЧВК использует <code>/pmc_requests</code> и <code>/pmc_accept номер</code>.",
         reply_markup=MAIN_INLINE,
     )
 
@@ -1417,17 +1444,21 @@ async def cmd_build_base(message: Message):
 
 @dp.message(Command("spy"))
 async def cmd_spy(message: Message):
-    """/spy user_id — скрытная разведка чужой страны. Цель никогда не уведомляется."""
+    """/spy @username — скрытная разведка чужой страны. Цель никогда не уведомляется."""
     parts = message.text.split()
-    if len(parts) != 2 or not parts[1].isdigit():
+    if len(parts) != 2 or not normalize_player_username(parts[1]):
         await answer_topic_safe(message,
-            "Формат: <code>/spy user_id</code>\n"
+            "Формат: <code>/spy @username</code>\n"
             f"Стоимость: 💰{config.SPY_COST_GOLD}. Кулдаун: {config.SPY_COOLDOWN_SECONDS // 60} мин.\n"
-            "Операция полностью скрытная — цель никогда не узнает, ни при успехе, ни при провале."
+            "У цели должен быть открытый Telegram username. Операция полностью скрытная — цель никогда не узнает, ни при успехе, ни при провале."
         )
         return
 
-    target_id = int(parts[1])
+    target = await resolve_country_target(parts[1])
+    if not target:
+        await answer_topic_safe(message, "Страна с таким @username не найдена или её владелец не указал публичный username.")
+        return
+    target_id = target["user_id"]
     spy_id = message.from_user.id
     if target_id == spy_id:
         await answer_topic_safe(message, "Шпионить за самим собой бессмысленно.")
@@ -1438,11 +1469,6 @@ async def cmd_spy(message: Message):
         if not spy_country:
             await answer_topic_safe(message, "Сначала создай страну: /founding Название")
             return
-        target = await db.get_country(target_id)
-        if not target:
-            await answer_topic_safe(message, "У этого user_id нет страны.")
-            return
-
         elapsed = int(time.time()) - spy_country.get("last_spy_at", 0)
         remaining = config.SPY_COOLDOWN_SECONDS - elapsed
         if remaining > 0:
@@ -1543,17 +1569,21 @@ async def cmd_raid_status(message: Message):
 
 @dp.message(Command("attack"))
 async def cmd_attack(message: Message):
-    """/attack user_id описание атаки — война между двумя игроками, вердикт от ИИ"""
+    """/attack @username описание атаки — война между двумя игроками, вердикт от ИИ"""
     parts = message.text.split(maxsplit=2)
-    if len(parts) < 3 or not parts[1].isdigit():
+    if len(parts) < 3 or not normalize_player_username(parts[1]):
         await answer_topic_safe(message,
-            "Формат: <code>/attack user_id описание атаки</code>\n"
-            "user_id соперника можно узнать через /top (или он сам скажет через /myid).\n"
-            "Пример: <code>/attack 123456789 Наношу внезапный удар по приграничным гарнизонам</code>"
+            "Формат: <code>/attack @username описание атаки</code>\n"
+            "Username соперника должен быть публичным и указан в его профиле страны.\n"
+            "Пример: <code>/attack @opponent Наношу внезапный удар по приграничным гарнизонам</code>"
         )
         return
 
-    defender_id = int(parts[1])
+    defender = await resolve_country_target(parts[1])
+    if not defender:
+        await answer_topic_safe(message, "Страна с таким @username не найдена или её владелец не указал публичный username.")
+        return
+    defender_id = defender["user_id"]
     action_text = parts[2].strip()
     if len(action_text) < config.MIN_NARRATIVE_LEN:
         await answer_topic_safe(message, f"Описание атаки должно содержать минимум {config.MIN_NARRATIVE_LEN} символов.")
@@ -1591,7 +1621,7 @@ async def cmd_attack(message: Message):
                 return
             defender = await db.get_country(defender_id)
             if not defender:
-                await answer_topic_safe(message, "У этого user_id нет страны — атаковать некого.")
+                await answer_topic_safe(message, "Страна соперника больше не зарегистрирована — атаковать некого.")
                 return
 
             if config.ATTACK_COOLDOWN_SECONDS > 0:
@@ -1612,7 +1642,7 @@ async def cmd_attack(message: Message):
             await hide_group_command(message)
             await answer_topic_safe(
                 message,
-                f"⚔️ Атака #{pending_id} объявлена против «{esc(defender['name'])}».\n"
+                f"⚔️ Атака #{pending_id} объявлена против «{esc(defender['name'])}» ({esc(player_label(defender))}).\n"
                 "Война не завершена. Защитник должен ответить командой "
                 f"<code>/defend {pending_id} описание обороны</code>.",
             )
@@ -1935,7 +1965,8 @@ async def cmd_statements(message: Message):
 
 @dp.message(Command("myid"))
 async def cmd_myid(message: Message):
-    await answer_topic_safe(message, f"Твой telegram user_id: <code>{message.from_user.id}</code>")
+    username = f"@{message.from_user.username}" if message.from_user.username else "не указан"
+    await answer_topic_safe(message, f"Твой username: <b>{esc(username)}</b>\nТехнический Telegram ID: <code>{message.from_user.id}</code> (нужен только для администрирования и поддержки).")
 
 
 BEGINNER_GUIDE = (
@@ -1948,7 +1979,7 @@ BEGINNER_GUIDE = (
     "<b>Что прокачивать дальше</b>\n"
     "Экономика даёт деньги и ресурсы. Население и резерв людей позволяют мобилизовать армию. Военные базы определяют вместимость армии. Дипломатия, торговля и альянсы помогают не воевать в одиночку.\n\n"
     "<b>Война</b>\n"
-    "Атака создаётся через <code>/attack user_id описание</code>, но вердикт не появляется сразу: защитник получает отдельное право на ответ через <code>/defend ID описание обороны</code>. В группе тексты ходов скрываются.\n\n"
+    "Атака создаётся через <code>/attack @username описание</code>, но вердикт не появляется сразу: защитник получает отдельное право на ответ через <code>/defend ID_войны описание обороны</code>. В группе тексты ходов скрываются. Для цели нужен публичный username.\n\n"
     "<b>Главное правило</b>\n"
     "Не нужно запоминать команды. Открывай «📊 Страна», «📈 Прогресс» и «☰ Ещё»: каждый экран показывает один ближайший шаг. Таймер означает, что действие нужно повторить позже, а не что страна сломалась."
 )
@@ -2392,15 +2423,19 @@ async def cmd_alliance_join(message: Message):
 @dp.message(Command("alliance_invite"))
 async def cmd_alliance_invite(message: Message):
     parts = message.text.split()
-    if len(parts) != 2 or not parts[1].isdigit():
-        await answer_topic_safe(message, "Формат: <code>/alliance_invite user_id</code>\nПриглашать можно только зарегистрированную страну.")
+    if len(parts) != 2 or not normalize_player_username(parts[1]):
+        await answer_topic_safe(message, "Формат: <code>/alliance_invite @username</code>\nПриглашать можно только зарегистрированную страну с публичным username.")
+        return
+    target_country = await resolve_country_target(parts[1])
+    if not target_country:
+        await answer_topic_safe(message, "Страна с таким @username не найдена или её владелец не указал публичный username.")
         return
     alliance = await db.get_user_alliance(message.from_user.id)
     inviter_country = await db.get_country(message.from_user.id)
     if not alliance or not inviter_country:
         await answer_topic_safe(message, "Сначала создай страну и вступи в альянс.")
         return
-    invitee_id = int(parts[1])
+    invitee_id = target_country["user_id"]
     invite_id = await db.create_alliance_invite(message.from_user.id, invitee_id, alliance["id"])
     if not invite_id:
         await answer_topic_safe(message, "Не удалось отправить приглашение: страна не найдена, уже состоит в альянсе или приглашение уже ожидает ответа.")
@@ -2415,7 +2450,7 @@ async def cmd_alliance_invite(message: Message):
             )
         except (TelegramBadRequest, TelegramForbiddenError):
             logger.info("Не удалось доставить приглашение в альянс пользователю %s", invitee_id)
-    await answer_topic_safe(message, f"✅ Приглашение #{invite_id} отправлено стране пользователя <code>{invitee_id}</code>.")
+    await answer_topic_safe(message, f"✅ Приглашение #{invite_id} отправлено стране <b>{esc(target_country['name'])}</b> ({esc(player_label(target_country))}).")
 
 
 @dp.message(Command("alliance_invites"))
@@ -2506,12 +2541,12 @@ TRADE_ALIASES = {
 async def _trade_list_text(user_id: int) -> str:
     contracts = await db.list_trade_contracts(user_id)
     if not contracts:
-        return "📜 <b>Торговые договоры</b>\n\nАктивных предложений нет.\n\nСоздать: <code>/trade_offer user_id ресурс количество цена</code>"
+        return "📜 <b>Торговые договоры</b>\n\nАктивных предложений нет.\n\nСоздать: <code>/trade_offer @username ресурс количество цена</code>"
     lines = ["📜 <b>Торговые договоры</b>", ""]
     for item in contracts:
         role = "тебе предлагают" if item["target_id"] == user_id else "ты предложил"
         name = item["proposer_name"] if item["target_id"] == user_id else item["target_name"]
-        lines.append(f"#{item['id']} · {role} стране <b>{esc(name or str(item['target_id']))}</b>")
+        lines.append(f"#{item['id']} · {role} стране <b>{esc(name or 'другой стране')}</b>")
         lines.append(f"{RESOURCE_NAMES_RU.get(item['resource'], item['resource'])}: {item['amount']:,} за 💰{item['price']:,}")
         if item["target_id"] == user_id:
             lines.append(f"Принять: <code>/trade_accept {item['id']}</code> · Отклонить: <code>/trade_reject {item['id']}</code>")
@@ -2521,10 +2556,14 @@ async def _trade_list_text(user_id: int) -> str:
 @dp.message(Command("sanction"))
 async def cmd_sanction(message: Message):
     parts = message.text.split(maxsplit=4)
-    if len(parts) < 5 or not parts[1].isdigit() or not parts[3].isdigit():
-        await answer_topic_safe(message, "Формат: <code>/sanction user_id economic|trade|diplomatic дни причина</code>")
+    if len(parts) < 5 or not normalize_player_username(parts[1]) or not parts[3].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/sanction @username economic|trade|diplomatic дни причина</code>")
         return
-    sanction_id = await db.create_country_sanction(message.from_user.id, int(parts[1]), parts[2].lower(), int(parts[3]), parts[4])
+    target = await resolve_country_target(parts[1])
+    if not target:
+        await answer_topic_safe(message, "Страна с таким @username не найдена или её владелец не указал публичный username.")
+        return
+    sanction_id = await db.create_country_sanction(message.from_user.id, target["user_id"], parts[2].lower(), int(parts[3]), parts[4])
     if not sanction_id:
         await answer_topic_safe(message, "Не удалось наложить санкции. Проверь страну, тип, срок 1–30 дней, лимит в 3 активные санкции и отсутствие такого же действующего ограничения.")
         return
@@ -2541,9 +2580,9 @@ async def cmd_sanctions(message: Message):
     lines = ["⚠️ <b>Санкции страны</b>", ""]
     for item in items:
         if item["issuer_id"] == message.from_user.id:
-            other, role = item.get("target_name") or str(item["target_id"]), "введены против"
+            other, role = item.get("target_name") or "другой стране", "введены против"
         else:
-            other, role = item.get("issuer_name") or str(item["issuer_id"]), "наложены страной"
+            other, role = item.get("issuer_name") or "другой страной", "наложены страной"
         lines.append(f"• #{item['id']} · {labels[item['sanction_type']]} · {role} <b>{esc(other)}</b> · <b>{item['status']}</b>\n  Причина: {esc(item['reason'])}")
     await answer_topic_safe(message, "\n\n".join(lines))
 
@@ -2551,15 +2590,19 @@ async def cmd_sanctions(message: Message):
 @dp.message(Command("pact_offer"))
 async def cmd_pact_offer(message: Message):
     parts = message.text.split(maxsplit=4)
-    if len(parts) < 5 or not parts[1].isdigit() or not parts[3].isdigit():
-        await answer_topic_safe(message, "Формат: <code>/pact_offer user_id non_aggression|defense|trade дни условия</code>")
+    if len(parts) < 5 or not normalize_player_username(parts[1]) or not parts[3].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/pact_offer @username non_aggression|defense|trade дни условия</code>")
         return
-    if int(parts[1]) == message.from_user.id:
+    target = await resolve_country_target(parts[1])
+    if not target:
+        await answer_topic_safe(message, "Страна с таким @username не найдена или её владелец не указал публичный username.")
+        return
+    if target["user_id"] == message.from_user.id:
         await answer_topic_safe(message, "Нельзя заключить пакт со своей страной.")
         return
-    pact_id = await db.create_diplomatic_pact(message.from_user.id, int(parts[1]), parts[2], parts[4], int(parts[3]))
+    pact_id = await db.create_diplomatic_pact(message.from_user.id, target["user_id"], parts[2], parts[4], int(parts[3]))
     if not pact_id:
-        await answer_topic_safe(message, "Не удалось создать предложение. Проверь user_id, тип, срок от 1 до 30 дней и отсутствие действующего пакта с этой страной.")
+        await answer_topic_safe(message, "Не удалось создать предложение. Проверь @username, тип, срок от 1 до 30 дней и отсутствие действующего пакта с этой страной.")
         return
     await answer_topic_safe(message, f"🤝 Предложение пакта <b>#{pact_id}</b> создано. Страна получателя увидит его в <code>/pacts</code>.")
 
@@ -2574,10 +2617,10 @@ async def cmd_pacts(message: Message):
     lines = ["🤝 <b>Дипломатические пакты</b>", ""]
     for pact in pacts:
         if pact["proposer_id"] == message.from_user.id:
-            other = pact.get("target_name") or str(pact["target_id"])
+            other = pact.get("target_name") or "другой стране"
             direction = "ты предложил"
         else:
-            other = pact.get("proposer_name") or str(pact["proposer_id"])
+            other = pact.get("proposer_name") or "другая страна"
             direction = "тебе предложили"
         action = ""
         if pact["status"] == "pending" and pact["target_id"] == message.from_user.id:
@@ -2614,13 +2657,16 @@ async def cmd_trade(message: Message):
 @dp.message(Command("trade_offer"))
 async def cmd_trade_offer(message: Message):
     parts = message.text.split()
-    if len(parts) != 5 or not parts[1].isdigit() or not parts[3].isdigit() or not parts[4].isdigit():
-        await answer_topic_safe(message, "Формат: <code>/trade_offer user_id ресурс количество цена</code>\nПример: <code>/trade_offer 123456 wood 1000 500</code>")
+    if len(parts) != 5 or not normalize_player_username(parts[1]) or not parts[3].isdigit() or not parts[4].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/trade_offer @username ресурс количество цена</code>\nПример: <code>/trade_offer @partner wood 1000 500</code>")
         return
-    target_id, amount, price = int(parts[1]), int(parts[3]), int(parts[4])
+    target = await resolve_country_target(parts[1])
+    if not target:
+        await answer_topic_safe(message, "Страна с таким @username не найдена или её владелец не указал публичный username.")
+        return
+    target_id, amount, price = target["user_id"], int(parts[3]), int(parts[4])
     resource = TRADE_ALIASES.get(parts[2].casefold())
     country = await db.get_country(message.from_user.id)
-    target = await db.get_country(target_id)
     if not country or not target:
         await answer_topic_safe(message, "Обе страны должны быть зарегистрированы.")
         return
@@ -2846,7 +2892,7 @@ async def cmd_give_points(message: Message):
         user_id, amount = int(parts[1]), int(parts[2])
         target_country = await db.get_country(user_id)
         if not target_country:
-            await answer_topic_safe(message, "У этого user_id нет страны.")
+            await answer_topic_safe(message, "У указанного технического user_id нет страны.")
             return
         await db.update_stat(user_id, "points", amount)
         await answer_topic_safe(message, f"Игроку {user_id} начислено {amount} очков.")
@@ -2961,7 +3007,7 @@ async def cmd_pmc_help(message: Message):
         "<b>Шаг 4. Поддерживай самостоятельную экономику</b>\n"
         "Доход не зависит только от контрактов. Открывай Центр ЧВК и используй «💵 Доход» или <code>/pmc_collect</code> раз в 45 минут: базовая деятельность и личный состав приносят деньги. Финансирование страны добровольное, а контракты — дополнительный заработок.\n\n"
         "<b>Шаг 5. Получай контракты от стран</b>\n"
-        "Список организаций: <code>/pmc_list</code>. Страна может отправить тебе скрытый запрос: <code>/pmc_request ID описание</code>. Ты увидишь описание, но обычные игроки не увидят страну-заказчика.\n\n"
+        "Список организаций: <code>/pmc_list</code>. Страна может отправить тебе скрытый запрос: <code>/pmc_request ID_организации описание</code>. Это ID ЧВК, а не Telegram ID; обычные игроки не увидят страну-заказчика.\n\n"
         "<b>Шаг 6. Решай по заказам</b>\n"
         "Проверь входящие запросы: <code>/pmc_requests</code>. Принять: <code>/pmc_accept номер</code>, отклонить: <code>/pmc_reject номер</code>.\n\n"
         "<b>Важно</b>\n"
@@ -2996,7 +3042,7 @@ async def cmd_pmc_list(message: Message):
     if not items:
         await answer_topic_safe(message, "Активных организаций пока нет.")
         return
-    lines = ["🏴 <b>Активные организации</b>", "", "Для анонимного запроса: <code>/pmc_request ID описание</code>", ""]
+    lines = ["🏴 <b>Активные организации</b>", "", "Для анонимного запроса используй ID организации из списка: <code>/pmc_request ID_организации описание</code>", ""]
     for pmc in items:
         label = "Террор" if pmc["org_type"] == "terror" else "ЧВК"
         lines.append(f"<code>{pmc['id']}</code> · {label} <b>{esc(pmc['name'])}</b> · репутация {pmc['reputation']}/100")
@@ -3007,7 +3053,7 @@ async def cmd_pmc_list(message: Message):
 async def cmd_pmc_request(message: Message):
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3 or not parts[1].isdigit() or len(parts[2].strip()) < 30:
-        await answer_topic_safe(message, "Формат: <code>/pmc_request ID описание</code>. Описание заказа — минимум 30 символов.")
+        await answer_topic_safe(message, "Формат: <code>/pmc_request ID_организации описание</code>. ID относится к ЧВК, описание заказа — минимум 30 символов.")
         return
     country = await db.get_country(message.from_user.id)
     pmc = await db.get_pmc(int(parts[1]))
@@ -3247,7 +3293,7 @@ async def cmd_help(message: Message):
         "<code>/pmc_create Название</code> — создать ЧВК\n"
         "<code>/pmc_create terror Название</code> — создать террористическую организацию\n"
         "<code>/pmc_list</code> — список организаций\n"
-        "<code>/pmc_request ID описание</code> — анонимно предложить заказ\n"
+        "<code>/pmc_request ID_организации описание</code> — анонимно предложить заказ ЧВК; это ID организации, не игрока\n"
         "<code>/pmc_profile</code> — профиль своей организации\n"
         "<code>/pmc_requests</code> — входящие заказы ЧВК\n"
         "<code>/pmc_fund сумма</code> — добровольно перевести деньги страны в инвентарь\n"
@@ -3260,19 +3306,19 @@ async def cmd_help(message: Message):
         "<code>/war_history</code> — история завершённых войн своей страны\n"
         "<code>/statement текст</code> — официальное заявление страны (КД 30 минут)\n"
         "<code>/statements</code> — публичная лента заявлений стран\n"
-        "<code>/alliance_invite user_id</code> — пригласить страну в свой альянс\n"
+        "<code>/alliance_invite @username</code> — пригласить страну в свой альянс\n"
         "<code>/alliance_invites</code> — входящие приглашения\n"
         "<code>/alliance_accept ID</code> / <code>/alliance_reject ID</code> — ответить на приглашение\n"
-        "<code>/pact_offer ID тип дни условия</code> — предложить дипломатический пакт\n"
+        "<code>/pact_offer @username тип дни условия</code> — предложить дипломатический пакт\n"
         "<code>/pacts</code> — свои предложения и действующие пакты\n"
         "<code>/pact_accept ID</code> / <code>/pact_reject ID</code> — ответить на предложение\n"
-        "<code>/sanction ID тип дни причина</code> — наложить санкции на страну\n"
+        "<code>/sanction @username тип дни причина</code> — наложить санкции на страну\n"
         "<code>/sanctions</code> — действующие и недавние санкции\n"
         "<code>/priority</code> — приоритет гражданского производства или армии\n"
         "<code>/tax</code> — налоговая ставка и налоги населения\n"
     )
     if is_admin(message.from_user.id):
-        text += "\n<b>🔐 Панель администратора</b>\n<code>/pmc_sanction ID тип причина</code> — санкция ЧВК."
+        text += "\n<b>🔐 Панель администратора</b>\n<code>/pmc_sanction ID_организации тип причина</code> — санкция ЧВК."
 
     await answer_topic_safe(message, text, reply_markup=MAIN_INLINE)
 

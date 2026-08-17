@@ -10,6 +10,7 @@ import bot
 async def main():
     old_helper = bot.answer_topic_safe
     old_admin = bot.is_admin
+    old_resolver = bot.resolve_country_target
     responses = []
 
     async def fake_helper(message, text, *args, **kwargs):
@@ -17,9 +18,12 @@ async def main():
 
     bot.answer_topic_safe = fake_helper
     bot.is_admin = lambda _user_id: True
+    async def fake_resolver(_value):
+        return {"user_id": 2002, "name": "Бета", "username": "beta_player"}
+    bot.resolve_country_target = fake_resolver
     try:
         attack = SimpleNamespace(
-            text="/attack 2002 Слишком коротко",
+            text="/attack @beta_player Слишком коротко",
             from_user=SimpleNamespace(id=2001),
         )
         await bot.cmd_attack(attack)
@@ -34,6 +38,7 @@ async def main():
     finally:
         bot.answer_topic_safe = old_helper
         bot.is_admin = old_admin
+        bot.resolve_country_target = old_resolver
     print("MIN_NARRATIVE_OK")
 
 
