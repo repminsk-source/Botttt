@@ -28,10 +28,12 @@ EXPECTED = {
     "premium:open": "callback_premium",
     "ui:pmc": "callback_pmc",
     "mode:country": "callback_mode_country",
+    "register:country": "callback_register_country",
+    "register:pmc": "callback_register_pmc",
     "premium:buy": "callback_premium_buy",
 }
 PMC_CALLBACKS = {
-    "pmc:profile", "pmc:requests", "pmc:recruit", "pmc:fund", "pmc:action", "pmc:news", "pmc:list", "pmc:help", "mode:country", "ui:more",
+    "pmc:profile", "pmc:requests", "pmc:collect", "pmc:recruit", "pmc:fund", "pmc:action", "pmc:news", "pmc:list", "pmc:help", "mode:country", "ui:more",
 }
 BUILD_CALLBACKS = {
     "build:farm", "build:mine", "build:market", "build:well", "build:granary",
@@ -48,7 +50,7 @@ def test_callback_handlers_registered():
         # The callback filter is a MagicFilter whose repr is opaque, so verify
         # the callback names and exact count after importing the real dispatcher.
         names[handler.callback.__name__] = names.get(handler.callback.__name__, 0) + 1
-    expected_names = set(EXPECTED.values()) | {"callback_build_type", "callback_pmc_profile", "callback_pmc_requests", "callback_pmc_list", "callback_pmc_help", "callback_pmc_command_hint"}
+    expected_names = set(EXPECTED.values()) | {"callback_build_type", "callback_pmc_profile", "callback_pmc_requests", "callback_pmc_list", "callback_pmc_help", "callback_pmc_collect", "callback_pmc_command_hint"}
     assert set(names) == expected_names
     assert all(count == 1 for count in names.values())
     actual_build_callbacks = {
@@ -72,6 +74,8 @@ def test_callback_handlers_registered():
         if button.callback_data
     }
     assert "mode:country" not in pmc_only_callbacks
+    assert "ui:pmc" in pmc_only_callbacks
+    assert "ui:more" not in pmc_only_callbacks
 
 
 if __name__ == "__main__":

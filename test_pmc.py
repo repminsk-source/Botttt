@@ -56,6 +56,10 @@ async def main():
         assert ok, reason
         ok2, why = await db.recruit_pmc(pmc_id, 1001, 2500, 101)
         assert not ok2 and why == "cooldown"
+        income_ok, income = await db.collect_pmc_income(pmc_id, 1001, 200)
+        assert income_ok and income == config.PMC_BASE_INCOME + 2 * config.PMC_INCOME_PER_1000_PERSONNEL
+        income_again, income_reason = await db.collect_pmc_income(pmc_id, 1001, 201)
+        assert not income_again and income_reason[0] == "cooldown"
         assert await db.sanction_pmc(pmc_id, "inventory_clear", "Тест санкции", 999, 102)
         after = await db.get_pmc(pmc_id)
         assert after["personnel"] == 0 and after["inventory_gold"] == 0

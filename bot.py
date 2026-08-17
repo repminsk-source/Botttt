@@ -6,7 +6,7 @@ import random
 import re
 import time
 
-from aiogram import Bot, Dispatcher, F
+from aiogram import BaseMiddleware, Bot, Dispatcher, F
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
@@ -42,7 +42,45 @@ bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseM
 dp = Dispatcher()
 spam_guard = AntiSpamMiddleware()
 
-# One active interface card per player and forum topic. The player is part of
+_REGISTRATION_COMMANDS = {"start", "founding", "pmc_create", "pmc_help", "help", "guide", "myid"}
+_REGISTRATION_CALLBACKS = {"register:country", "register:pmc", "ui:guide"}
+
+
+class RegistrationGateMiddleware(BaseMiddleware):
+    """Keep unregistered users in onboarding until they choose a game path."""
+
+    async def __call__(self, handler, event, data):
+        user = getattr(event, "from_user", None)
+        if user is None or is_admin(user.id):
+            return await handler(event, data)
+        if getattr(event, "new_chat_members", None):
+            return await handler(event, data)
+        country = await db.get_country(user.id)
+        pmc = await db.get_pmc_by_owner(user.id)
+        if country or pmc:
+            return await handler(event, data)
+        if isinstance(event, CallbackQuery):
+            if event.data in _REGISTRATION_CALLBACKS:
+                return await handler(event, data)
+            await event.answer("Сначала зарегистрируй страну или ЧВК через /start.", show_alert=True)
+            return
+        text = (getattr(event, "text", "") or "").strip()
+        command = text.split(maxsplit=1)[0].split("@", 1)[0].lstrip("/").casefold() if text.startswith("/") else ""
+        if command in _REGISTRATION_COMMANDS:
+            return await handler(event, data)
+        if isinstance(event, Message):
+            await answer_topic_safe(
+                event,
+                "🔒 Доступ к игровому меню закрыт до регистрации. Нажми /start и выбери: 🌍 страна или 🏴 ЧВК.",
+                reply_markup=REGISTRATION_INLINE,
+                owner_id=user.id,
+            )
+        return
+
+
+registration_gate = RegistrationGateMiddleware()
+
+# One active interface per player and forum topic. The player is part of
 # the key because a group can contain many independent game sessions.
 _ACTIVE_INTERFACE_MESSAGES: dict[tuple[int, int, int], int] = {}
 _INTERFACE_DELETE_TASKS: dict[tuple[int, int], asyncio.Task] = {}
@@ -84,6 +122,8 @@ def _schedule_interface_deletion(chat_id: int, message_id: int) -> None:
 
 dp.message.middleware(spam_guard)
 dp.callback_query.middleware(spam_guard)
+dp.message.middleware(registration_gate)
+dp.callback_query.middleware(registration_gate)
 
 
 def esc(text) -> str:
@@ -105,6 +145,12 @@ def news_excerpt(text, limit: int = 420) -> str:
         return esc(value)
     shortened = value[: limit + 1].rsplit(" ", 1)[0].rstrip(" .,;:!?—–-")
     return esc((shortened or value[:limit]).rstrip()) + "…"
+
+
+def parse_four_digit_year(value: str) -> int | None:
+    """Return a valid four-digit world year or None."""
+    value = str(value or "")
+    return int(value) if len(value) == 4 and value.isdigit() else None
 
 
 def command_payload(message: Message) -> str:
@@ -221,6 +267,11 @@ MORE_KEYBOARD = ReplyKeyboardMarkup(
 
 # Inline buttons are the reliable interface in groups: unlike reply-keyboard
 # text, callback queries are delivered even when Telegram Privacy Mode is on.
+REGISTRATION_INLINE = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="🌍 Создать страну", callback_data="register:country")],
+    [InlineKeyboardButton(text="🏴 Создать ЧВК", callback_data="register:pmc")],
+    [InlineKeyboardButton(text="📖 Правила", callback_data="ui:guide")],
+])
 MAIN_INLINE = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="📊 Страна", callback_data="ui:country"), InlineKeyboardButton(text="📥 Сбор", callback_data="ui:collect")],
     [InlineKeyboardButton(text="🏗️ Строить", callback_data="ui:build"), InlineKeyboardButton(text="⚔️ Армия", callback_data="ui:army")],
@@ -281,10 +332,11 @@ PROGRESS_INLINE = InlineKeyboardMarkup(inline_keyboard=[
 
 PMC_INLINE = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="📊 Профиль", callback_data="pmc:profile"), InlineKeyboardButton(text="📨 Заказы", callback_data="pmc:requests")],
-    [InlineKeyboardButton(text="👥 Набор", callback_data="pmc:recruit"), InlineKeyboardButton(text="💰 Бюджет", callback_data="pmc:fund")],
-    [InlineKeyboardButton(text="⚔️ Операция", callback_data="pmc:action"), InlineKeyboardButton(text="📰 Новости", callback_data="pmc:news")],
-    [InlineKeyboardButton(text="🌐 Организации", callback_data="pmc:list"), InlineKeyboardButton(text="📖 Правила", callback_data="pmc:help")],
-    [InlineKeyboardButton(text="⬅️ Разделы", callback_data="ui:more")],
+    [InlineKeyboardButton(text="💵 Доход", callback_data="pmc:collect"), InlineKeyboardButton(text="💰 Бюджет", callback_data="pmc:fund")],
+    [InlineKeyboardButton(text="👥 Набор", callback_data="pmc:recruit"), InlineKeyboardButton(text="⚔️ Операция", callback_data="pmc:action")],
+    [InlineKeyboardButton(text="📰 Новости", callback_data="pmc:news"), InlineKeyboardButton(text="🌐 Организации", callback_data="pmc:list")],
+    [InlineKeyboardButton(text="📖 Правила", callback_data="pmc:help")],
+    [InlineKeyboardButton(text="⬅️ Центр ЧВК", callback_data="ui:pmc")],
 ])
 PMC_COUNTRY_INLINE = InlineKeyboardMarkup(inline_keyboard=[
     *PMC_INLINE.inline_keyboard[:-1],
@@ -660,8 +712,20 @@ async def cmd_start(message: Message):
         "<b>🏴 Игра за ЧВК</b>\n"
         "ЧВК регистрируется отдельно и не требует страны: <code>/pmc_create Название</code>. Затем открой <code>/pmc_profile</code>, найми сотрудников через <code>/pmc_recruit количество</code> и получай заказы от стран.\n"
         "Финансирование от своей страны необязательно: если она есть, можно добровольно перевести средства через <code>/pmc_fund сумма</code>. Для военной операции используй <code>/pmc_action описание</code>, для публикации — <code>/pmc_news текст</code>.",
-        reply_markup=MAIN_INLINE,
+        reply_markup=REGISTRATION_INLINE,
     )
+
+
+@dp.callback_query(F.data == "register:country")
+async def callback_register_country(callback: CallbackQuery):
+    await callback.answer()
+    await answer_topic_safe(callback.message, "🌍 <b>Регистрация страны</b>\n\nВыбери реальную страну и отправь команду:\n<code>/founding Бразилия</code>\n\nПосле регистрации откроется главное меню и появится первый шаг развития.", reply_markup=REGISTRATION_INLINE, owner_id=callback.from_user.id)
+
+
+@dp.callback_query(F.data == "register:pmc")
+async def callback_register_pmc(callback: CallbackQuery):
+    await callback.answer()
+    await answer_topic_safe(callback.message, "🏴 <b>Регистрация ЧВК</b>\n\nЧВК создаётся отдельно и страна не нужна. Отправь:\n<code>/pmc_create Название</code>\n\nПосле регистрации автоматически откроется Центр ЧВК.", reply_markup=REGISTRATION_INLINE, owner_id=callback.from_user.id)
 
 
 @dp.message(F.new_chat_members)
@@ -1892,6 +1956,9 @@ BEGINNER_GUIDE = (
 
 @dp.message(Command("guide"))
 async def cmd_guide(message: Message):
+    if not await db.get_country(message.from_user.id) and not await db.get_pmc_by_owner(message.from_user.id):
+        await answer_topic_safe(message, "Сначала выбери путь регистрации через /start: страна или самостоятельная ЧВК.", reply_markup=REGISTRATION_INLINE)
+        return
     await answer_topic_safe(message, BEGINNER_GUIDE, reply_markup=MAIN_INLINE)
 
 
@@ -2011,7 +2078,7 @@ async def render_pmc_dashboard(message: Message, owner_id: int | None = None):
             f"💰 Бюджет ЧВК: <b>{funds:,}</b>\n"
             f"📨 Ожидающие заказы: <b>{len(pending_requests)}</b>\n\n"
             f"🧭 <b>Что делать сейчас</b>\n{next_step}\n\n"
-            "<b>Разделы меню:</b> профиль показывает состояние организации; бюджет и набор развивают ресурсы; заказы дают работу; операция нужна для военного RP; новости формируют публичную историю.\n\n"
+            "<b>Разделы меню:</b> профиль показывает состояние организации; доход и бюджет поддерживают самостоятельную экономику; набор развивает личный состав; заказы дают дополнительную работу; операция нужна для военного RP; новости формируют публичную историю.\n\n"
             "Статистика ЧВК и страны хранится отдельно. Для перехода к стране нажми «🌍 Страна»."
         )
     markup = PMC_COUNTRY_INLINE if has_country else PMC_INLINE
@@ -2057,6 +2124,11 @@ async def callback_pmc_help(callback: CallbackQuery):
     await finish_callback(callback, "/pmc_help", cmd_pmc_help, PMC_INLINE)
 
 
+@dp.callback_query(F.data == "pmc:collect")
+async def callback_pmc_collect(callback: CallbackQuery):
+    await finish_callback(callback, "/pmc_collect", cmd_pmc_collect, PMC_INLINE)
+
+
 @dp.callback_query(F.data.in_({"pmc:recruit", "pmc:fund", "pmc:action", "pmc:news"}))
 async def callback_pmc_command_hint(callback: CallbackQuery):
     await callback.answer()
@@ -2072,12 +2144,21 @@ async def callback_pmc_command_hint(callback: CallbackQuery):
 @dp.callback_query(F.data == "ui:more")
 async def callback_more(callback: CallbackQuery):
     await callback.answer()
+    if await db.get_pmc_by_owner(callback.from_user.id) and not await db.get_country(callback.from_user.id):
+        await render_pmc_dashboard(callback.message.model_copy(update={"from_user": callback.from_user}), owner_id=callback.from_user.id)
+        return
     await answer_topic_safe(callback.message, "<b>Ещё разделы</b>", reply_markup=MORE_INLINE, owner_id=callback.from_user.id)
 
 
 @dp.callback_query(F.data == "ui:back")
 async def callback_back(callback: CallbackQuery):
     await callback.answer()
+    if await db.get_pmc_by_owner(callback.from_user.id) and not await db.get_country(callback.from_user.id):
+        await render_pmc_dashboard(callback.message.model_copy(update={"from_user": callback.from_user}), owner_id=callback.from_user.id)
+        return
+    if not await db.get_country(callback.from_user.id):
+        await answer_topic_safe(callback.message, "Сначала выбери страну или ЧВК через /start.", reply_markup=REGISTRATION_INLINE, owner_id=callback.from_user.id)
+        return
     await answer_topic_safe(callback.message, "<b>Главное меню</b>", reply_markup=MAIN_INLINE, owner_id=callback.from_user.id)
 
 
@@ -2086,7 +2167,10 @@ async def callback_country(callback: CallbackQuery):
     await callback.answer()
     country = await db.get_country(callback.from_user.id)
     if not country:
-        await answer_topic_safe(callback.message, "Сначала основи страну: <code>/founding Бразилия</code>", reply_markup=MAIN_INLINE, owner_id=callback.from_user.id)
+        if await db.get_pmc_by_owner(callback.from_user.id):
+            await render_pmc_dashboard(callback.message.model_copy(update={"from_user": callback.from_user}), owner_id=callback.from_user.id)
+        else:
+            await answer_topic_safe(callback.message, "Сначала выбери страну или ЧВК через /start.", reply_markup=REGISTRATION_INLINE, owner_id=callback.from_user.id)
         return
     await answer_topic_safe(callback.message, await format_country_summary(country), reply_markup=COUNTRY_INLINE, owner_id=callback.from_user.id)
 
@@ -2096,7 +2180,10 @@ async def callback_economy(callback: CallbackQuery):
     await callback.answer()
     country = await db.get_country(callback.from_user.id)
     if not country:
-        await answer_topic_safe(callback.message, "Сначала основи страну: <code>/founding Бразилия</code>", reply_markup=MAIN_INLINE, owner_id=callback.from_user.id)
+        if await db.get_pmc_by_owner(callback.from_user.id):
+            await render_pmc_dashboard(callback.message.model_copy(update={"from_user": callback.from_user}), owner_id=callback.from_user.id)
+        else:
+            await answer_topic_safe(callback.message, "Сначала выбери страну или ЧВК через /start.", reply_markup=REGISTRATION_INLINE, owner_id=callback.from_user.id)
         return
     await answer_topic_safe(callback.message, await format_country_economy(country), reply_markup=ECONOMY_INLINE, owner_id=callback.from_user.id)
 
@@ -2232,6 +2319,12 @@ async def callback_guide(callback: CallbackQuery):
 
 @dp.message(F.text == "⬅️ Назад")
 async def menu_back(message: Message):
+    if await db.get_pmc_by_owner(message.from_user.id) and not await db.get_country(message.from_user.id):
+        await render_pmc_dashboard(message)
+        return
+    if not await db.get_country(message.from_user.id):
+        await answer_topic_safe(message, "Сначала выбери страну или ЧВК через /start.", reply_markup=REGISTRATION_INLINE)
+        return
     await answer_topic_safe(message, "Главное меню", reply_markup=MAIN_INLINE)
 
 # --- Альянсы ---
@@ -2294,6 +2387,78 @@ async def cmd_alliance_join(message: Message):
         return
     await db.join_alliance(message.from_user.id, alliance["id"])
     await answer_topic_safe(message, f"✅ «{esc(country['name'])}» вступила в <b>{esc(alliance['tag'])}</b> — {esc(alliance['name'])}.")
+
+
+@dp.message(Command("alliance_invite"))
+async def cmd_alliance_invite(message: Message):
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/alliance_invite user_id</code>\nПриглашать можно только зарегистрированную страну.")
+        return
+    alliance = await db.get_user_alliance(message.from_user.id)
+    inviter_country = await db.get_country(message.from_user.id)
+    if not alliance or not inviter_country:
+        await answer_topic_safe(message, "Сначала создай страну и вступи в альянс.")
+        return
+    invitee_id = int(parts[1])
+    invite_id = await db.create_alliance_invite(message.from_user.id, invitee_id, alliance["id"])
+    if not invite_id:
+        await answer_topic_safe(message, "Не удалось отправить приглашение: страна не найдена, уже состоит в альянсе или приглашение уже ожидает ответа.")
+        return
+    target = await db.get_country(invitee_id)
+    if target and target.get("chat_id"):
+        try:
+            await bot.send_message(
+                target["chat_id"],
+                f"🤝 Страна <b>{esc(inviter_country['name'])}</b> приглашает тебя в альянс <b>{esc(alliance['tag'])}</b> — {esc(alliance['name'])}.\n\n"
+                f"Посмотреть приглашения: <code>/alliance_invites</code>\nПринять: <code>/alliance_accept {invite_id}</code>\nОтклонить: <code>/alliance_reject {invite_id}</code>",
+            )
+        except (TelegramBadRequest, TelegramForbiddenError):
+            logger.info("Не удалось доставить приглашение в альянс пользователю %s", invitee_id)
+    await answer_topic_safe(message, f"✅ Приглашение #{invite_id} отправлено стране пользователя <code>{invitee_id}</code>.")
+
+
+@dp.message(Command("alliance_invites"))
+async def cmd_alliance_invites(message: Message):
+    invites = await db.list_alliance_invites(message.from_user.id)
+    if not invites:
+        await answer_topic_safe(message, "🤝 Новых приглашений в альянсы нет.")
+        return
+    lines = ["🤝 <b>Приглашения в альянсы</b>", ""]
+    for invite in invites:
+        inviter = esc(invite.get("inviter_name") or str(invite["inviter_id"]))
+        lines.append(
+            f"#{invite['id']} · <b>{esc(invite['tag'])}</b> — {esc(invite['name'])}\n"
+            f"От: {inviter}\n"
+            f"Принять: <code>/alliance_accept {invite['id']}</code> · отклонить: <code>/alliance_reject {invite['id']}</code>"
+        )
+    await answer_topic_safe(message, "\n\n".join(lines))
+
+
+@dp.message(Command("alliance_accept"))
+async def cmd_alliance_accept(message: Message):
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/alliance_accept ID</code>")
+        return
+    result = await db.resolve_alliance_invite(int(parts[1]), message.from_user.id, True)
+    if not result:
+        await answer_topic_safe(message, "Приглашение не найдено, уже обработано или ты уже состоишь в альянсе.")
+        return
+    await answer_topic_safe(message, f"✅ Твоя страна вступила в альянс <b>{esc(result['tag'])}</b> — {esc(result['name'])}.")
+
+
+@dp.message(Command("alliance_reject"))
+async def cmd_alliance_reject(message: Message):
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await answer_topic_safe(message, "Формат: <code>/alliance_reject ID</code>")
+        return
+    result = await db.resolve_alliance_invite(int(parts[1]), message.from_user.id, False)
+    if not result:
+        await answer_topic_safe(message, "Приглашение не найдено или уже обработано.")
+        return
+    await answer_topic_safe(message, "Приглашение отклонено.")
 
 
 @dp.message(Command("alliance_leave"))
@@ -2612,10 +2777,10 @@ async def cmd_set_year(message: Message):
         await answer_topic_safe(message, "Команда только для админов.")
         return
     parts = message.text.split()
-    if len(parts) != 2 or not parts[1].lstrip("-").isdigit():
-        await answer_topic_safe(message, "Формат: <code>/set_year год</code>\nПример: <code>/set_year 2140</code>")
+    year = parse_four_digit_year(parts[1]) if len(parts) == 2 else None
+    if year is None:
+        await answer_topic_safe(message, "Год должен состоять ровно из 4 цифр. Формат: <code>/set_year 2026</code>")
         return
-    year = int(parts[1])
     await db.set_world_year(year)
     await answer_topic_safe(message,
         f"📅 Год мира установлен: <b>{year}</b>.\n"
@@ -2782,6 +2947,7 @@ async def cmd_pmc_create(message: Message):
 
 @dp.message(Command("pmc_help"))
 async def cmd_pmc_help(message: Message):
+    pmc_markup = PMC_INLINE if await db.get_pmc_by_owner(message.from_user.id) else REGISTRATION_INLINE
     await answer_topic_safe(
         message,
         "🏴 <b>Как зарегистрироваться и играть за ЧВК</b>\n\n"
@@ -2792,13 +2958,15 @@ async def cmd_pmc_help(message: Message):
         "Личный состав, техника, репутация и средства ЧВК хранятся отдельно от страны. Если у владельца есть страна, она может добровольно спонсировать организацию через <code>/pmc_fund сумма</code>, но это не является обязательным.\n\n"
         "<b>Шаг 3. Набирай сотрудников</b>\n"
         "Команда: <code>/pmc_recruit количество</code>. За один набор — максимум 2 500 человек, между наборами действует КД 6 часов, общий предел — 250 000 сотрудников.\n\n"
-        "<b>Шаг 4. Получай контракты от стран</b>\n"
+        "<b>Шаг 4. Поддерживай самостоятельную экономику</b>\n"
+        "Доход не зависит только от контрактов. Открывай Центр ЧВК и используй «💵 Доход» или <code>/pmc_collect</code> раз в 45 минут: базовая деятельность и личный состав приносят деньги. Финансирование страны добровольное, а контракты — дополнительный заработок.\n\n"
+        "<b>Шаг 5. Получай контракты от стран</b>\n"
         "Список организаций: <code>/pmc_list</code>. Страна может отправить тебе скрытый запрос: <code>/pmc_request ID описание</code>. Ты увидишь описание, но обычные игроки не увидят страну-заказчика.\n\n"
-        "<b>Шаг 5. Решай по заказам</b>\n"
+        "<b>Шаг 6. Решай по заказам</b>\n"
         "Проверь входящие запросы: <code>/pmc_requests</code>. Принять: <code>/pmc_accept номер</code>, отклонить: <code>/pmc_reject номер</code>.\n\n"
         "<b>Важно</b>\n"
         "Стране разрешено иметь максимум 2 активных договора с ЧВК. Анонимный заказ должен иметь понятную RP-причину. При нарушениях куратор может вынести предупреждение, очистить инвентарь, приостановить или дисквалифицировать организацию. Для террористической организации официальный набор и обычные анонимные заказы запрещены.",
-        reply_markup=PMC_INLINE,
+        reply_markup=pmc_markup,
     )
 
 
@@ -2992,6 +3160,27 @@ async def cmd_pmc_news_feed(message: Message):
         year = f" · {item['game_year']} год" if item.get("game_year") else ""
         lines.append(f"• <b>{esc(item['organization_name'])}</b>{year}\n{esc(item['statement'][:500])}")
     await answer_topic_safe(message, "\n\n".join(lines), reply_markup=PMC_INLINE)
+@dp.message(Command("pmc_collect"))
+async def cmd_pmc_collect(message: Message):
+    pmc = await db.get_pmc_by_owner(message.from_user.id)
+    if not pmc:
+        await answer_topic_safe(message, "Сначала создай организацию: <code>/pmc_create Название</code>.")
+        return
+    ok, detail = await db.collect_pmc_income(pmc["id"], message.from_user.id)
+    if ok:
+        await answer_topic_safe(
+            message,
+            f"✅ Самостоятельный доход ЧВК: <b>+💰{detail:,}</b>.\n"
+            "Доход формируется от базовой деятельности организации и личного состава; контракты дают дополнительный заработок.",
+            reply_markup=PMC_INLINE,
+        )
+        return
+    if isinstance(detail, tuple) and detail[0] == "cooldown":
+        await answer_topic_safe(message, f"⏳ Следующий сбор дохода ЧВК можно провести через <b>{format_duration(detail[1])}</b>.", reply_markup=PMC_INLINE)
+        return
+    await answer_topic_safe(message, "❌ Организация недоступна или не принадлежит тебе.", reply_markup=PMC_INLINE)
+
+
 @dp.message(Command("pmc_fund"))
 async def cmd_pmc_fund(message: Message):
     parts = message.text.split()
@@ -3040,6 +3229,9 @@ async def cmd_pmc_sanction(message: Message):
 
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
+    if not await db.get_country(message.from_user.id) and not await db.get_pmc_by_owner(message.from_user.id):
+        await answer_topic_safe(message, "Сначала выбери путь регистрации через /start: страна или самостоятельная ЧВК.", reply_markup=REGISTRATION_INLINE)
+        return
     if await db.get_pmc_by_owner(message.from_user.id) and not await db.get_country(message.from_user.id):
         await cmd_pmc_help(message)
         return
@@ -3058,7 +3250,8 @@ async def cmd_help(message: Message):
         "<code>/pmc_request ID описание</code> — анонимно предложить заказ\n"
         "<code>/pmc_profile</code> — профиль своей организации\n"
         "<code>/pmc_requests</code> — входящие заказы ЧВК\n"
-        "<code>/pmc_fund сумма</code> — перевести деньги страны в инвентарь\n"
+        "<code>/pmc_fund сумма</code> — добровольно перевести деньги страны в инвентарь\n"
+        "<code>/pmc_collect</code> — собрать самостоятельный доход ЧВК (КД 45 минут)\n"
         "<code>/pmc_recruit количество</code> — набор (КД 6 часов)\n"
         "<code>/pmc_action описание</code> — военный вердикт самостоятельной операции ЧВК (КД 10 минут)\n"
         "<code>/pmc_news текст</code> — официальная новость ЧВК\n"
@@ -3067,6 +3260,9 @@ async def cmd_help(message: Message):
         "<code>/war_history</code> — история завершённых войн своей страны\n"
         "<code>/statement текст</code> — официальное заявление страны (КД 30 минут)\n"
         "<code>/statements</code> — публичная лента заявлений стран\n"
+        "<code>/alliance_invite user_id</code> — пригласить страну в свой альянс\n"
+        "<code>/alliance_invites</code> — входящие приглашения\n"
+        "<code>/alliance_accept ID</code> / <code>/alliance_reject ID</code> — ответить на приглашение\n"
         "<code>/pact_offer ID тип дни условия</code> — предложить дипломатический пакт\n"
         "<code>/pacts</code> — свои предложения и действующие пакты\n"
         "<code>/pact_accept ID</code> / <code>/pact_reject ID</code> — ответить на предложение\n"

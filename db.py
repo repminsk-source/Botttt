@@ -90,7 +90,16 @@ CREATE TABLE IF NOT EXISTS alliance_members (
     alliance_id INTEGER NOT NULL,
     joined_at INTEGER NOT NULL
 );
-
+CREATE TABLE IF NOT EXISTS alliance_invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alliance_id INTEGER NOT NULL,
+    inviter_id INTEGER NOT NULL,
+    invitee_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'accepted', 'rejected', 'cancelled')),
+    created_at INTEGER NOT NULL,
+    resolved_at INTEGER,
+    UNIQUE(alliance_id, invitee_id, status)
+);
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
@@ -257,6 +266,7 @@ CREATE TABLE IF NOT EXISTS pmcs (
     inventory_gold INTEGER NOT NULL DEFAULT 0 CHECK(inventory_gold >= 0),
     last_recruit_at INTEGER NOT NULL DEFAULT 0,
     last_action_at INTEGER NOT NULL DEFAULT 0,
+    last_collect_at INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );
 
@@ -336,6 +346,7 @@ MIGRATIONS = [
     "ALTER TABLE countries ADD COLUMN real_gdp_per_capita_usd REAL",
     "ALTER TABLE countries ADD COLUMN real_life_expectancy REAL",
     "ALTER TABLE pmcs ADD COLUMN last_action_at INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE pmcs ADD COLUMN last_collect_at INTEGER NOT NULL DEFAULT 0",
 ]
 
 # Разрешённые имена колонок для update_stat/update_resource.
@@ -1561,6 +1572,97 @@ async def get_alliance_members(alliance_id: int):
         return [dict(r) for r in rows]
 
 
+async def create_alliance_invite(inviter_id: int, invitee_id: int, alliance_id: int, timestamp: int | None = None):
+    """Create an invite only when the inviter leads the selected alliance."""
+    if inviter_id == invitee_id:
+        return None
+    timestamp = int(timestamp or time.time())
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        cur = await db.execute("SELECT 1 FROM alliance_members WHERE user_id = ? AND alliance_id = ?", (inviter_id, alliance_id))
+        if not await cur.fetchone():
+            await db.rollback()
+            return None
+        cur = await db.execute("SELECT 1 FROM countries WHERE user_id = ?", (invitee_id,))
+        if not await cur.fetchone():
+            await db.rollback()
+            return None
+        cur = await db.execute("SELECT 1 FROM alliance_members WHERE user_id = ?", (invitee_id,))
+        if await cur.fetchone():
+            await db.rollback()
+            return None
+        cur = await db.execute(
+            "SELECT id FROM alliance_invites WHERE alliance_id = ? AND invitee_id = ? AND status = 'pending'",
+            (alliance_id, invitee_id),
+        )
+        if await cur.fetchone():
+            await db.rollback()
+            return None
+        try:
+            cur = await db.execute(
+                "INSERT INTO alliance_invites (alliance_id, inviter_id, invitee_id, created_at) VALUES (?, ?, ?, ?)",
+                (alliance_id, inviter_id, invitee_id, timestamp),
+            )
+        except aiosqlite.IntegrityError:
+            await db.rollback()
+            return None
+        await db.commit()
+        return int(cur.lastrowid)
+
+
+async def list_alliance_invites(user_id: int):
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT i.id, i.alliance_id, i.inviter_id, i.created_at, a.tag, a.name,
+                      c.name AS inviter_name
+               FROM alliance_invites i
+               JOIN alliances a ON a.id = i.alliance_id
+               LEFT JOIN countries c ON c.user_id = i.inviter_id
+               WHERE i.invitee_id = ? AND i.status = 'pending'
+               ORDER BY i.id DESC""",
+            (user_id,),
+        )
+        return [dict(row) for row in await cur.fetchall()]
+
+
+async def resolve_alliance_invite(invite_id: int, invitee_id: int, accept: bool, timestamp: int | None = None):
+    timestamp = int(timestamp or time.time())
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        cur = await db.execute(
+            """SELECT i.*, a.tag, a.name FROM alliance_invites i
+               JOIN alliances a ON a.id = i.alliance_id
+               WHERE i.id = ? AND i.invitee_id = ? AND i.status = 'pending'""",
+            (invite_id, invitee_id),
+        )
+        invite = await cur.fetchone()
+        if not invite:
+            await db.rollback()
+            return None
+        if not accept:
+            await db.execute("UPDATE alliance_invites SET status = 'rejected', resolved_at = ? WHERE id = ?", (timestamp, invite_id))
+            await db.commit()
+            return {"accepted": False, **dict(invite)}
+        cur = await db.execute("SELECT 1 FROM alliance_members WHERE user_id = ?", (invitee_id,))
+        if await cur.fetchone():
+            await db.rollback()
+            return None
+        await db.execute(
+            "INSERT INTO alliance_members (user_id, alliance_id, joined_at) VALUES (?, ?, ?)",
+            (invitee_id, invite["alliance_id"], timestamp),
+        )
+        await db.execute(
+            "UPDATE countries SET reputation = MIN(100, reputation + 2), stability = MIN(100, stability + 1) WHERE user_id = ?",
+            (invitee_id,),
+        )
+        await db.execute("UPDATE alliance_invites SET status = 'accepted', resolved_at = ? WHERE id = ?", (timestamp, invite_id))
+        await db.commit()
+        return {"accepted": True, **dict(invite)}
+
+
 # --- ЧВК и анонимные заказы ---
 
 async def create_pmc(owner_id: int, name: str, org_type: str = "pmc", timestamp: int | None = None):
@@ -1765,6 +1867,34 @@ async def sanction_pmc(pmc_id: int, sanction_type: str, reason: str, actor_id: i
         await conn.execute("INSERT INTO pmc_sanctions (pmc_id, sanction_type, reason, actor_id, created_at) VALUES (?, ?, ?, ?, ?)", (pmc_id, sanction_type, reason[:500], actor_id, timestamp))
         await conn.commit()
         return True
+
+
+async def collect_pmc_income(pmc_id: int, owner_id: int, timestamp: int | None = None):
+    from config import PMC_BASE_INCOME, PMC_COLLECT_COOLDOWN_SECONDS, PMC_INCOME_PER_1000_PERSONNEL
+    timestamp = int(timestamp or time.time())
+    async with _connect() as conn:
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("BEGIN IMMEDIATE")
+        cur = await conn.execute(
+            "SELECT personnel, last_collect_at FROM pmcs WHERE id = ? AND owner_id = ? AND status = 'active'",
+            (pmc_id, owner_id),
+        )
+        pmc = await cur.fetchone()
+        if not pmc:
+            await conn.rollback()
+            return False, "not_owner"
+        last_collect_at = int(pmc["last_collect_at"] or 0)
+        remaining = PMC_COLLECT_COOLDOWN_SECONDS - (timestamp - last_collect_at) if last_collect_at else 0
+        if remaining > 0:
+            await conn.rollback()
+            return False, ("cooldown", remaining)
+        income = PMC_BASE_INCOME + (int(pmc["personnel"]) // 1000) * PMC_INCOME_PER_1000_PERSONNEL
+        await conn.execute(
+            "UPDATE pmcs SET inventory_gold = inventory_gold + ?, last_collect_at = ? WHERE id = ? AND owner_id = ? AND status = 'active'",
+            (income, timestamp, pmc_id, owner_id),
+        )
+        await conn.commit()
+        return True, income
 
 
 async def fund_pmc(pmc_id: int, owner_id: int, amount: int, timestamp: int | None = None) -> bool:
