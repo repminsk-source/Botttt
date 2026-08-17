@@ -3,6 +3,7 @@ import html
 import logging
 import os
 import random
+import re
 import time
 
 from aiogram import Bot, Dispatcher, F
@@ -93,6 +94,17 @@ def esc(text) -> str:
     и message.answer/edit_text падает с ошибкой "can't parse entities".
     """
     return html.escape(str(text), quote=False)
+
+
+def news_excerpt(text, limit: int = 420) -> str:
+    """Return a readable, escaped excerpt without stored HTML or mid-word cuts."""
+    value = html.unescape(str(text or ""))
+    value = re.sub(r"<[^>]*>", "", value)
+    value = " ".join(value.split())
+    if len(value) <= limit:
+        return esc(value)
+    shortened = value[: limit + 1].rsplit(" ", 1)[0].rstrip(" .,;:!?—–-")
+    return esc((shortened or value[:limit]).rstrip()) + "…"
 
 
 def command_payload(message: Message) -> str:
@@ -1797,11 +1809,24 @@ async def cmd_news(message: Message):
     if not events:
         await answer_topic_safe(message, "📰 <b>Мои новости</b>\n\nЛичных действий пока не было. Глобальная лента находится в разделе «🌎 Мир».", reply_markup=MORE_INLINE)
         return
-    lines = ["📰 <b>Мои новости</b>", "", "Здесь только решения и последствия твоей страны.", ""]
-    for e in events:
-        lines.append(f"• {esc(e['verdict_text'][:240])}")
-    lines += ["", "Глобальные события: открой «🌎 Мир»." ]
-    await answer_topic_safe(message, "\n\n".join(lines), reply_markup=MORE_INLINE)
+    lines = [
+        "📰 <b>Мои новости</b>",
+        "",
+        "Здесь только решения и последствия твоей страны.",
+        "",
+    ]
+    for index, event in enumerate(events, start=1):
+        country_name = esc(event.get("country_name", "Твоя страна"))
+        action = news_excerpt(event.get("action_text", ""), 180)
+        outcome = news_excerpt(event.get("verdict_text", ""), 420)
+        lines.append(f"<b>{index}. {country_name}</b>")
+        if action:
+            lines.append(f"🎯 <b>Решение:</b> {action}")
+        lines.append(f"📌 <b>Итог:</b> {outcome}")
+        if index != len(events):
+            lines.append("")
+    lines.extend(["", "🌎 <b>Глобальные события:</b> открой раздел «Мир». "])
+    await answer_topic_safe(message, "\n".join(lines), reply_markup=MORE_INLINE)
 
 
 @dp.message(Command("statement"))
